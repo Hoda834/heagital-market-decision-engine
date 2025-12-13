@@ -119,7 +119,6 @@ else:
         r["recommended_cutoff_top_n"] = int(top_n)
         r["recommended_included"] = int(r["rank"]) <= int(top_n)
 
-
     except Exception as e:
         st.error(f"Run failed: {e}")
         return
