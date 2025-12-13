@@ -1,1 +1,12 @@
+weights:
+  clinical_risk: 0.45
+  adoption_readiness: 0.35
+  procurement_friction: 0.20
+
+normalisation:
+  method: minmax
+  clip: true
+
+cutoff:
+  top_n: 15
 
