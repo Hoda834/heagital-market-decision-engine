@@ -1,4 +1,3 @@
-import pandas as pd
 from __future__ import annotations
 
 import io
@@ -7,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import pandas as pd
 import streamlit as st
 
 sys.path.append(str(Path(__file__).resolve().parent / "src"))
@@ -55,7 +55,9 @@ def _to_csv_bytes(rows: List[Dict[str, object]]) -> bytes:
 
 def main() -> None:
     st.title("Heagital Market Decision Engine")
-    st.caption("Upload an ICB level dataset using the provided template. Then set decision weights and run the ranking.")
+    st.caption(
+        "Upload an ICB level dataset using the provided template. Then set decision weights and run the ranking."
+    )
 
     project_root = Path(__file__).resolve().parent
     template_path = project_root / "data" / "template" / "icb_input_template.csv"
@@ -106,18 +108,24 @@ def main() -> None:
     try:
         data_path = _write_temp_csv(uploaded.getvalue())
 
-        rows = load_icb_features(data_path)
-        validate_icb_features(rows)
+        df = load_icb_features(data_path)
+        validate_icb_features(df)
 
-        ranked = score_and_rank(rows, scoring_config_path)
+        ranked = score_and_rank(df, scoring_config_path)
 
-if isinstance(ranked, pd.DataFrame):
-    ranked["recommended_cutoff_top_n"] = int(top_n)
-    ranked["recommended_included"] = ranked["rank"].astype(int) <= int(top_n)
-else:
-    for r in ranked:
-        r["recommended_cutoff_top_n"] = int(top_n)
-        r["recommended_included"] = int(r["rank"]) <= int(top_n)
+        if isinstance(ranked, pd.DataFrame):
+            ranked["recommended_cutoff_top_n"] = int(top_n)
+            ranked["recommended_included"] = ranked["rank"].astype(int) <= int(top_n)
+            csv_bytes = ranked.to_csv(index=False).encode("utf-8")
+
+            included_count = int(ranked["recommended_included"].sum())
+        else:
+            for r in ranked:
+                r["recommended_cutoff_top_n"] = int(top_n)
+                r["recommended_included"] = int(r["rank"]) <= int(top_n)
+
+            csv_bytes = _to_csv_bytes(ranked)
+            included_count = len([r for r in ranked if bool(r.get("recommended_included"))])
 
     except Exception as e:
         st.error(f"Run failed: {e}")
@@ -133,20 +141,13 @@ else:
 
     with c2:
         st.subheader("Download")
-        if isinstance(ranked, pd.DataFrame):
-    csv_bytes = ranked.to_csv(index=False).encode("utf-8")
-else:
-    csv_bytes = _to_csv_bytes(ranked)
-
-st.download_button(
-    label="Download ranking CSV",
-    data=csv_bytes,
-    file_name="icb_opportunity_ranking.csv",
-    mime="text/csv",
-)
-
-        included = [r for r in ranked if bool(r.get("recommended_included"))]
-        st.metric("Included ICBs", len(included))
+        st.download_button(
+            label="Download ranking CSV",
+            data=csv_bytes,
+            file_name="icb_opportunity_ranking.csv",
+            mime="text/csv",
+        )
+        st.metric("Included ICBs", included_count)
 
 
 if __name__ == "__main__":
