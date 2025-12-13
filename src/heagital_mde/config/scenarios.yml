@@ -1,1 +1,24 @@
+base_case:
+  weight_adjustments:
+    clinical_risk: 0.0
+    adoption_readiness: 0.0
+    procurement_friction: 0.0
+
+nice_tightening:
+  weight_adjustments:
+    clinical_risk: 0.15
+    adoption_readiness: -0.05
+    procurement_friction: -0.10
+
+warfarin_decline:
+  weight_adjustments:
+    clinical_risk: -0.10
+    adoption_readiness: -0.20
+    procurement_friction: 0.30
+
+community_testing_expansion:
+  weight_adjustments:
+    clinical_risk: 0.0
+    adoption_readiness: 0.10
+    procurement_friction: -0.20
 
