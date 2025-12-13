@@ -1,3 +1,4 @@
+import pandas as pd
 from __future__ import annotations
 
 import io
@@ -110,9 +111,14 @@ def main() -> None:
 
         ranked = score_and_rank(rows, scoring_config_path)
 
-        for r in ranked:
-            r["recommended_cutoff_top_n"] = int(top_n)
-            r["recommended_included"] = int(r["rank"]) <= int(top_n)
+if isinstance(ranked, pd.DataFrame):
+    ranked["recommended_cutoff_top_n"] = int(top_n)
+    ranked["recommended_included"] = ranked["rank"].astype(int) <= int(top_n)
+else:
+    for r in ranked:
+        r["recommended_cutoff_top_n"] = int(top_n)
+        r["recommended_included"] = int(r["rank"]) <= int(top_n)
+
 
     except Exception as e:
         st.error(f"Run failed: {e}")
@@ -128,12 +134,18 @@ def main() -> None:
 
     with c2:
         st.subheader("Download")
-        st.download_button(
-            label="Download ranking CSV",
-            data=_to_csv_bytes(ranked),
-            file_name="icb_opportunity_ranking.csv",
-            mime="text/csv",
-        )
+        if isinstance(ranked, pd.DataFrame):
+    csv_bytes = ranked.to_csv(index=False).encode("utf-8")
+else:
+    csv_bytes = _to_csv_bytes(ranked)
+
+st.download_button(
+    label="Download ranking CSV",
+    data=csv_bytes,
+    file_name="icb_opportunity_ranking.csv",
+    mime="text/csv",
+)
+
         included = [r for r in ranked if bool(r.get("recommended_included"))]
         st.metric("Included ICBs", len(included))
 
