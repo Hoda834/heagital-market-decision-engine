@@ -1,0 +1,43 @@
+ICB ODS code,ICB ONS code,ICB name,Register,Prevalence (%),PCA Rate(%),Patients receiving Intervention (%),Treatment Gap (%),Warfarin Item icb,Region
+QYG,E54000008,NHS Cheshire and Merseyside Integrated Care Board,"74,319",2.68,6.43,89.63,10.37,205371,North West
+QHM,E54000050,NHS North East and North Cumbria Integrated Care Board,"81,919",2.55,6.08,90.26,9.74,187338,North East and Yorkshire
+QE1,E54000048,NHS Lancashire and South Cumbria Integrated Care Board,"46,642",2.52,7.78,88.43,11.57,145153,North West
+QNX,E54000053,NHS Sussex Integrated Care Board,"52,778",2.86,7.76,88.37,11.63,105103,South East
+QWO,E54000054,NHS West Yorkshire Integrated Care Board,"52,289",1.95,7.29,88.94,11.06,181118,North East and Yorkshire
+QMM,E54000022,NHS Norfolk and Waveney Integrated Care Board ,"32,053",2.93,7.86,88.01,11.99,93113,East of England
+QRL,E54000042,NHS Hampshire and the Isle of Wight Integrated Care Board,"50,950",2.6,7.61,88.33,11.67,68710,South East
+QOQ,E54000051,NHS Humber and North Yorkshire Integrated Care Board,"49,691",2.76,5.96,90.3,9.7,120193,North East and Yorkshire
+QOP,E54000057,NHS Greater Manchester Integrated Care Board,"60,232",1.85,6.66,89.86,10.14,144857,North West
+QJK,E54000037,NHS Devon Integrated Care Board,"39,100",3.02,6.7,89.57,10.43,78614,South West
+QKS,E54000032,NHS Kent and Medway Integrated Care Board,"48,798",2.42,6,89.97,10.03,101663,South East
+QU9,E54000044,"NHS Buckinghamshire, Oxfordshire and Berkshire West Integrated Care Board","43,640",2.19,6.07,89.89,10.11,102887,South East
+QVV,E54000041,NHS Dorset Integrated Care Board,"26,834",3.23,7.06,89.45,10.55,39888,South West
+QKK,E54000030,NHS South East London Integrated Care Board,"26,404",1.25,8.42,86.76,13.24,74182,London
+QSL,E54000038,NHS Somerset Integrated Care Board,"19,323",3.2,7.32,89.17,10.83,30742,South West
+QXU,E54000052,NHS Surrey Heartlands Integrated Care Board,"27,837",2.44,7.24,88.84,11.16,49744,South East
+QT6,E54000036,NHS Cornwall and the Isles of Scilly Integrated Care Board,"19,500",3.23,6.48,89.79,10.21,39177,South West
+QF7,E54000061,NHS South Yorkshire Integrated Care Board,"34,960",2.3,5.67,90.24,9.76,91451,North East and Yorkshire
+QJG,E54000023,NHS Suffolk and North East Essex Integrated Care Board,"29,500",2.76,5.57,90.82,9.18,85508,East of England
+QM7,E54000025,NHS Hertfordshire and West Essex Integrated Care Board,"34,889",2.11,5.44,90.65,9.35,105649,East of England
+QUA,E54000062,NHS Black Country Integrated Care Board,"27,411",2.06,4.77,89.14,10.86,64978,Midlands
+QWU,E54000018,NHS Coventry and Warwickshire Integrated Care Board,"22,456",2.04,7.64,88.9,11.1,55955,Midlands
+QOC,E54000011,"NHS Shropshire, Telford and Wrekin Integrated Care Board","14,386",2.7,7.64,89.23,10.77,32633,Midlands
+QJ2,E54000058,NHS Derby and Derbyshire Integrated Care Board,"29,115",2.57,6.59,90.11,9.89,48499,Midlands
+QGH,E54000019,NHS Herefordshire and Worcestershire Integrated Care Board,"23,776",2.87,6.32,90.26,9.74,37046,Midlands
+QRV,E54000027,NHS North West London Integrated Care Board,"31,671",1.1,7.99,88.16,11.84,70001,London
+QNC,E54000010,NHS Staffordshire and Stoke-on-Trent Integrated Care Board,"31,875",2.66,4.88,91.63,8.37,68927,Midlands
+QR1,E54000043,NHS Gloucestershire Integrated Care Board,"18,976",2.77,5.8,90.41,9.59,37536,South West
+QMJ,E54000028,NHS North Central London Integrated Care Board,"21,313",1.18,8.52,87.99,12.01,59694,London
+QOX,E54000040,"NHS Bath and North East Somerset, Swindon and Wiltshire Integrated Care Board","26,185",2.61,5.52,90.9,9.1,49192,South West
+QT1,E54000060,NHS Nottingham and Nottinghamshire Integrated Care Board,"28,089",2.21,5.59,90.16,9.84,48577,Midlands
+QNQ,E54000034,NHS Frimley Integrated Care Board,"16,603",1.97,6.54,89.29,10.71,48952,South East
+QUE,E54000056,NHS Cambridgeshire and Peterborough Integrated Care Board,"21,480",2.05,6.52,90.02,9.98,59784,East of England
+QJM,E54000013,NHS Lincolnshire Integrated Care Board,"23,814",2.9,3.98,91.99,8.01,62428,Midlands
+QUY,E54000039,"NHS Bristol, North Somerset and South Gloucestershire Integrated Care Board","23,733",2.18,6.76,89.92,10.08,28390,South West
+QWE,E54000031,NHS South West London Integrated Care Board,"24,404",1.39,7,89.44,10.56,63021,London
+QHL,E54000055,NHS Birmingham and Solihull Integrated Care Board,"24,857",1.53,7.18,89.28,10.72,32608,Midlands
+QHG,E54000024,"NHS Bedfordshire, Luton and Milton Keynes Integrated Care Board","19,545",1.73,4.65,90.95,9.05,57609,East of England
+QH8,E54000026,NHS Mid and South Essex Integrated Care Board,"28,098",2.19,4.01,92.41,7.59,56425,East of England
+QPM,E54000059,NHS Northamptonshire Integrated Care Board,"18,253",2.17,4.53,92.12,7.88,53071,Midlands
+QK1,E54000015,"NHS Leicester, Leicestershire and Rutland Integrated Care Board","25,053",2.04,4.46,92.31,7.69,52440,Midlands
+QMF,E54000029,NHS North East London Integrated Care Board,"22,369",0.91,5.91,91.46,8.54,63616,London
