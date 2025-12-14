@@ -1,5 +1,3 @@
-import matplotlib.pyplot as plt
-
 from __future__ import annotations
 
 import io
@@ -8,6 +6,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
@@ -53,6 +52,91 @@ def _to_csv_bytes(rows: List[Dict[str, object]]) -> bytes:
     writer.writeheader()
     writer.writerows(rows)
     return buffer.getvalue().encode("utf-8")
+
+
+def _ensure_dataframe(ranked: object) -> pd.DataFrame:
+    if isinstance(ranked, pd.DataFrame):
+        return ranked.copy()
+    if isinstance(ranked, list):
+        return pd.DataFrame(ranked)
+    raise TypeError("Unsupported results type returned by score_and_rank.")
+
+
+def _build_region_pivot(df_view: pd.DataFrame) -> pd.DataFrame:
+    df = df_view.copy()
+
+    required = {
+        "region",
+        "icb_code",
+        "recommended_included",
+        "opportunity_score",
+        "n_clinical_risk",
+        "n_adoption_readiness",
+        "n_procurement_friction",
+    }
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Cannot build regional pivot. Missing columns: {missing}")
+
+    df["region"] = df["region"].fillna("Unknown").astype(str).str.strip()
+    df["recommended_included"] = df["recommended_included"].astype(bool)
+
+    pivot = (
+        df.groupby("region", dropna=False)
+        .agg(
+            total_icbs=("icb_code", "count"),
+            included_icbs=("recommended_included", "sum"),
+            included_rate=("recommended_included", "mean"),
+            avg_opportunity_score=("opportunity_score", "mean"),
+            avg_n_clinical_risk=("n_clinical_risk", "mean"),
+            avg_n_adoption_readiness=("n_adoption_readiness", "mean"),
+            avg_n_procurement_friction=("n_procurement_friction", "mean"),
+        )
+        .reset_index()
+    )
+
+    pivot["included_rate"] = (pivot["included_rate"] * 100.0).round(1)
+
+    pivot = pivot.sort_values(
+        by=["included_icbs", "avg_opportunity_score", "total_icbs"],
+        ascending=[False, False, False],
+        kind="mergesort",
+    ).reset_index(drop=True)
+
+    return pivot
+
+
+def _render_heatmap(region_pivot: pd.DataFrame) -> None:
+    heat_cols = [
+        "avg_opportunity_score",
+        "included_rate",
+        "avg_n_clinical_risk",
+        "avg_n_adoption_readiness",
+        "avg_n_procurement_friction",
+    ]
+
+    heat_df = region_pivot.set_index("region")[heat_cols].copy()
+
+    if heat_df.shape[0] < 2:
+        st.info("Heatmap requires at least two regions to compare.")
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    im = ax.imshow(heat_df.values, aspect="auto")
+
+    ax.set_yticks(range(len(heat_df.index)))
+    ax.set_yticklabels([str(x) for x in heat_df.index])
+
+    ax.set_xticks(range(len(heat_df.columns)))
+    ax.set_xticklabels(list(heat_df.columns), rotation=45, ha="right")
+
+    ax.set_title("Region level summary heatmap")
+
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel("Score", rotation=-90, va="bottom")
+
+    st.pyplot(fig)
+    plt.close(fig)
 
 
 def main() -> None:
@@ -110,24 +194,21 @@ def main() -> None:
     try:
         data_path = _write_temp_csv(uploaded.getvalue())
 
-        df = load_icb_features(data_path)
-        validate_icb_features(df)
+        df_in = load_icb_features(data_path)
+        validate_icb_features(df_in)
 
-        ranked = score_and_rank(df, scoring_config_path)
+        ranked = score_and_rank(df_in, scoring_config_path)
 
-        if isinstance(ranked, pd.DataFrame):
-            ranked["recommended_cutoff_top_n"] = int(top_n)
-            ranked["recommended_included"] = ranked["rank"].astype(int) <= int(top_n)
-            csv_bytes = ranked.to_csv(index=False).encode("utf-8")
+        df_ranked = _ensure_dataframe(ranked)
 
-            included_count = int(ranked["recommended_included"].sum())
-        else:
-            for r in ranked:
-                r["recommended_cutoff_top_n"] = int(top_n)
-                r["recommended_included"] = int(r["rank"]) <= int(top_n)
+        df_ranked["recommended_cutoff_top_n"] = int(top_n)
+        df_ranked["recommended_included"] = df_ranked["rank"].astype(int) <= int(top_n)
 
-            csv_bytes = _to_csv_bytes(ranked)
-            included_count = len([r for r in ranked if bool(r.get("recommended_included"))])
+        csv_bytes = df_ranked.to_csv(index=False).encode("utf-8")
+
+        included_count = int(df_ranked["recommended_included"].sum())
+
+        region_pivot = _build_region_pivot(df_ranked)
 
     except Exception as e:
         st.error(f"Run failed: {e}")
@@ -139,63 +220,13 @@ def main() -> None:
 
     with c1:
         st.subheader("ICB ranking")
-        st.dataframe(ranked, use_container_width=True, hide_index=True)
-            st.subheader("Regional summary")
+        st.dataframe(df_ranked, use_container_width=True, hide_index=True)
 
-    if isinstance(ranked, pd.DataFrame):
-        df_view = ranked.copy()
-    else:
-        df_view = pd.DataFrame(ranked)
-
-    if "region" not in df_view.columns:
-        st.warning("Region column not found in results, so regional summary cannot be computed.")
-    else:
-        df_view["recommended_included"] = df_view["recommended_included"].astype(bool)
-
-        region_summary = (
-            df_view.groupby("region", dropna=False)
-            .agg(
-                total_icbs=("icb_code", "count"),
-                included_icbs=("recommended_included", "sum"),
-                included_rate=("recommended_included", "mean"),
-                avg_opportunity_score=("opportunity_score", "mean"),
-                avg_n_clinical_risk=("n_clinical_risk", "mean"),
-                avg_n_adoption_readiness=("n_adoption_readiness", "mean"),
-                avg_n_procurement_friction=("n_procurement_friction", "mean"),
-            )
-            .reset_index()
-            .sort_values(["included_icbs", "avg_opportunity_score"], ascending=[False, False])
-        )
-
-        region_summary["included_rate"] = (region_summary["included_rate"] * 100.0).round(1)
-
-        st.dataframe(region_summary, use_container_width=True, hide_index=True)
+        st.subheader("Regional pivot summary")
+        st.dataframe(region_pivot, use_container_width=True, hide_index=True)
 
         st.subheader("Regional heatmap")
-
-        heat_cols = [
-            "avg_opportunity_score",
-            "included_rate",
-            "avg_n_clinical_risk",
-            "avg_n_adoption_readiness",
-            "avg_n_procurement_friction",
-        ]
-
-        heat_df = region_summary.set_index("region")[heat_cols].copy()
-
-        fig, ax = plt.subplots()
-        im = ax.imshow(heat_df.to_numpy(), aspect="auto")
-
-        ax.set_yticks(range(len(heat_df.index)))
-        ax.set_yticklabels([str(x) for x in heat_df.index])
-
-        ax.set_xticks(range(len(heat_df.columns)))
-        ax.set_xticklabels(list(heat_df.columns), rotation=45, ha="right")
-
-        ax.set_title("Region level summary heatmap")
-        fig.colorbar(im, ax=ax)
-
-        st.pyplot(fig)
+        _render_heatmap(region_pivot)
 
     with c2:
         st.subheader("Download")
