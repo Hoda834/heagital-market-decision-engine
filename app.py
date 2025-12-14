@@ -1,3 +1,5 @@
+import matplotlib.pyplot as plt
+
 from __future__ import annotations
 
 import io
@@ -138,6 +140,62 @@ def main() -> None:
     with c1:
         st.subheader("ICB ranking")
         st.dataframe(ranked, use_container_width=True, hide_index=True)
+            st.subheader("Regional summary")
+
+    if isinstance(ranked, pd.DataFrame):
+        df_view = ranked.copy()
+    else:
+        df_view = pd.DataFrame(ranked)
+
+    if "region" not in df_view.columns:
+        st.warning("Region column not found in results, so regional summary cannot be computed.")
+    else:
+        df_view["recommended_included"] = df_view["recommended_included"].astype(bool)
+
+        region_summary = (
+            df_view.groupby("region", dropna=False)
+            .agg(
+                total_icbs=("icb_code", "count"),
+                included_icbs=("recommended_included", "sum"),
+                included_rate=("recommended_included", "mean"),
+                avg_opportunity_score=("opportunity_score", "mean"),
+                avg_n_clinical_risk=("n_clinical_risk", "mean"),
+                avg_n_adoption_readiness=("n_adoption_readiness", "mean"),
+                avg_n_procurement_friction=("n_procurement_friction", "mean"),
+            )
+            .reset_index()
+            .sort_values(["included_icbs", "avg_opportunity_score"], ascending=[False, False])
+        )
+
+        region_summary["included_rate"] = (region_summary["included_rate"] * 100.0).round(1)
+
+        st.dataframe(region_summary, use_container_width=True, hide_index=True)
+
+        st.subheader("Regional heatmap")
+
+        heat_cols = [
+            "avg_opportunity_score",
+            "included_rate",
+            "avg_n_clinical_risk",
+            "avg_n_adoption_readiness",
+            "avg_n_procurement_friction",
+        ]
+
+        heat_df = region_summary.set_index("region")[heat_cols].copy()
+
+        fig, ax = plt.subplots()
+        im = ax.imshow(heat_df.to_numpy(), aspect="auto")
+
+        ax.set_yticks(range(len(heat_df.index)))
+        ax.set_yticklabels([str(x) for x in heat_df.index])
+
+        ax.set_xticks(range(len(heat_df.columns)))
+        ax.set_xticklabels(list(heat_df.columns), rotation=45, ha="right")
+
+        ax.set_title("Region level summary heatmap")
+        fig.colorbar(im, ax=ax)
+
+        st.pyplot(fig)
 
     with c2:
         st.subheader("Download")
