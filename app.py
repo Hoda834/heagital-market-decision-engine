@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import matplotlib.pyplot as plt
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 sys.path.append(str(Path(__file__).resolve().parent / "src"))
@@ -15,7 +16,6 @@ sys.path.append(str(Path(__file__).resolve().parent / "src"))
 from heagital_mde.io.load_icb import load_icb_features
 from heagital_mde.io.validate import validate_icb_features
 from heagital_mde.model.scoring import score_and_rank
-
 
 st.set_page_config(page_title="Heagital Market Decision Engine", layout="wide")
 
@@ -62,6 +62,12 @@ def _ensure_dataframe(ranked: object) -> pd.DataFrame:
     raise TypeError("Unsupported results type returned by score_and_rank.")
 
 
+def _normalise_region_label(x: object) -> str:
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return "Unknown"
+    return str(x).strip()
+
+
 def _build_region_pivot(df_view: pd.DataFrame) -> pd.DataFrame:
     df = df_view.copy()
 
@@ -78,7 +84,7 @@ def _build_region_pivot(df_view: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"Cannot build regional pivot. Missing columns: {missing}")
 
-    df["region"] = df["region"].fillna("Unknown").astype(str).str.strip()
+    df["region"] = df["region"].map(_normalise_region_label)
     df["recommended_included"] = df["recommended_included"].astype(bool)
 
     pivot = (
@@ -106,48 +112,112 @@ def _build_region_pivot(df_view: pd.DataFrame) -> pd.DataFrame:
     return pivot
 
 
-def _render_heatmap(region_pivot: pd.DataFrame) -> None:
-    heat_cols = [
-        "avg_opportunity_score",
-        "included_rate",
-        "avg_n_clinical_risk",
-        "avg_n_adoption_readiness",
-        "avg_n_procurement_friction",
-    ]
+def _build_region_opportunity(df_view: pd.DataFrame) -> pd.DataFrame:
+    df = df_view.copy()
 
-    heat_df = region_pivot.set_index("region")[heat_cols].copy()
+    required = {"region", "opportunity_score"}
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Cannot build region opportunity summary. Missing columns: {missing}")
 
-    if heat_df.shape[0] < 2:
-        st.info("Heatmap requires at least two regions to compare.")
+    df["region"] = df["region"].map(_normalise_region_label)
+
+    out = (
+        df.groupby("region", dropna=False)
+        .agg(avg_opportunity_score=("opportunity_score", "mean"))
+        .reset_index()
+    )
+
+    out["avg_opportunity_score"] = pd.to_numeric(out["avg_opportunity_score"], errors="coerce")
+    out = out.dropna(subset=["avg_opportunity_score"]).reset_index(drop=True)
+
+    out = out.sort_values(by="avg_opportunity_score", ascending=False, kind="mergesort").reset_index(drop=True)
+    return out
+
+
+def _extract_geo_regions(geo: dict, featureidkey: str) -> List[str]:
+    parts = featureidkey.split(".", 1)
+    if len(parts) != 2:
+        return []
+    _, key_path = parts
+    keys = key_path.split(".")
+    out: List[str] = []
+
+    for feat in geo.get("features", []):
+        cur = feat
+        ok = True
+        for k in keys:
+            if isinstance(cur, dict) and k in cur:
+                cur = cur[k]
+            else:
+                ok = False
+                break
+        if ok:
+            out.append(_normalise_region_label(cur))
+    return out
+
+
+def _render_uk_region_map(
+    region_scores: pd.DataFrame,
+    geojson_path: Path,
+    featureidkey: str = "properties.region",
+) -> None:
+    if not geojson_path.exists():
+        st.error(f"Missing GeoJSON file. Expected at: {geojson_path}")
         return
 
-    fig, ax = plt.subplots(figsize=(9, 4))
-    im = ax.imshow(heat_df.values, aspect="auto")
+    if region_scores.empty:
+        st.info("No region scores available to plot.")
+        return
 
-    ax.set_yticks(range(len(heat_df.index)))
-    ax.set_yticklabels([str(x) for x in heat_df.index])
+    geo = json.loads(geojson_path.read_text(encoding="utf-8"))
 
-    ax.set_xticks(range(len(heat_df.columns)))
-    ax.set_xticklabels(list(heat_df.columns), rotation=45, ha="right")
+    geo_regions = set(_extract_geo_regions(geo, featureidkey))
+    data_regions = set(region_scores["region"].map(_normalise_region_label).tolist())
 
-    ax.set_title("Region level summary heatmap")
+    missing_in_geo = sorted([r for r in data_regions if r not in geo_regions and r != "Unknown"])
+    missing_in_data = sorted([r for r in geo_regions if r not in data_regions])
 
-    cbar = fig.colorbar(im, ax=ax)
-    cbar.ax.set_ylabel("Score", rotation=-90, va="bottom")
+    if missing_in_geo:
+        with st.expander("Map matching diagnostics"):
+            st.write("These region labels exist in your data but were not found in the GeoJSON:")
+            st.code("\n".join(missing_in_geo))
 
-    st.pyplot(fig)
-    plt.close(fig)
+    if missing_in_data:
+        with st.expander("Map matching diagnostics"):
+            st.write("These region labels exist in the GeoJSON but were not found in your data:")
+            st.code("\n".join(missing_in_data))
+
+    fig = px.choropleth(
+        region_scores,
+        geojson=geo,
+        featureidkey=featureidkey,
+        locations="region",
+        color="avg_opportunity_score",
+        projection="mercator",
+        hover_name="region",
+        hover_data={"avg_opportunity_score": ":.3f"},
+    )
+
+    fig.update_geos(fitbounds="locations", visible=False)
+    fig.update_layout(
+        title="UK opportunity score by region",
+        margin={"r": 0, "t": 45, "l": 0, "b": 0},
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def main() -> None:
     st.title("Heagital Market Decision Engine")
-    st.caption(
-        "Upload an ICB level dataset using the provided template. Then set decision weights and run the ranking."
-    )
+    st.caption("Upload an ICB level dataset using the provided template. Then set decision weights and run the ranking.")
 
     project_root = Path(__file__).resolve().parent
     template_path = project_root / "data" / "template" / "icb_input_template.csv"
     scoring_config_path = project_root / "src" / "heagital_mde" / "config" / "scoring_config.yml"
+
+    geojson_path = project_root / "data" / "geo" / "uk_regions.geojson"
+    geo_featureidkey = "properties.region"
 
     with st.sidebar:
         st.header("Step 1  Download template")
@@ -178,6 +248,12 @@ def main() -> None:
 
         top_n = st.number_input("Recommended cut off Top N", min_value=1, max_value=100, value=15, step=1)
 
+        st.divider()
+        st.header("Outputs")
+        st.caption("UK map is based on regional average opportunity score.")
+        st.caption("Expected GeoJSON location: data/geo/uk_regions.geojson")
+        geo_featureidkey = st.text_input("GeoJSON featureidkey", value=geo_featureidkey)
+
         run = st.button("Run ranking", type="primary", disabled=(uploaded is None))
 
     if uploaded is None:
@@ -198,17 +274,16 @@ def main() -> None:
         validate_icb_features(df_in)
 
         ranked = score_and_rank(df_in, scoring_config_path)
-
         df_ranked = _ensure_dataframe(ranked)
 
         df_ranked["recommended_cutoff_top_n"] = int(top_n)
         df_ranked["recommended_included"] = df_ranked["rank"].astype(int) <= int(top_n)
 
         csv_bytes = df_ranked.to_csv(index=False).encode("utf-8")
-
         included_count = int(df_ranked["recommended_included"].sum())
 
         region_pivot = _build_region_pivot(df_ranked)
+        region_scores = _build_region_opportunity(df_ranked)
 
     except Exception as e:
         st.error(f"Run failed: {e}")
@@ -225,8 +300,11 @@ def main() -> None:
         st.subheader("Regional pivot summary")
         st.dataframe(region_pivot, use_container_width=True, hide_index=True)
 
-        st.subheader("Regional heatmap")
-        _render_heatmap(region_pivot)
+        st.subheader("UK region map")
+        _render_uk_region_map(region_scores, geojson_path=geojson_path, featureidkey=geo_featureidkey)
+
+        st.subheader("Region opportunity score summary")
+        st.dataframe(region_scores, use_container_width=True, hide_index=True)
 
     with c2:
         st.subheader("Download")
