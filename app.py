@@ -216,7 +216,7 @@ def main() -> None:
     template_path = project_root / "data" / "template" / "icb_input_template.csv"
     scoring_config_path = project_root / "src" / "heagital_mde" / "config" / "scoring_config.yml"
 
-    geojson_path = project_root / "data" / "geo" / "uk_regions.geojson"
+    geojson_path = project_root / "data" / "geo" / "nhs_england_regions.geojson"
     geo_featureidkey = "properties.region"
 
     with st.sidebar:
