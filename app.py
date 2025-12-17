@@ -315,6 +315,25 @@ def main() -> None:
 
         region_pivot = _build_region_pivot(df_ranked)
         region_scores = _build_region_opportunity(df_ranked)
+        REGION_CENTROIDS = {
+    "North East and Yorkshire": {"lat": 54.8, "lon": -1.8},
+    "North West": {"lat": 54.0, "lon": -2.8},
+    "Midlands": {"lat": 52.8, "lon": -1.5},
+    "East of England": {"lat": 52.3, "lon": 0.5},
+    "London": {"lat": 51.5, "lon": -0.1},
+    "South East": {"lat": 51.2, "lon": 0.8},
+    "South West": {"lat": 50.9, "lon": -3.5},
+}
+
+region_scores["lat"] = region_scores["region"].map(
+    lambda r: REGION_CENTROIDS.get(r, {}).get("lat")
+)
+region_scores["lon"] = region_scores["region"].map(
+    lambda r: REGION_CENTROIDS.get(r, {}).get("lon")
+)
+
+region_scores = region_scores.dropna(subset=["lat", "lon"])
+
 
     except Exception as e:
         st.error(f"Run failed: {e}")
@@ -331,13 +350,8 @@ def main() -> None:
         st.subheader("Regional pivot summary")
         st.dataframe(region_pivot, use_container_width=True, hide_index=True)
 
-        st.subheader("UK region map")
-        _render_uk_region_map(
-            region_scores,
-            geojson_path=geojson_path,
-            featureidkey=geo_featureidkey,
-            target_points=int(densify_points),
-        )
+        st.subheader("UK opportunity map (web)")
+render_web_map(region_scores)
 
         st.subheader("Region opportunity score summary")
         st.dataframe(region_scores, use_container_width=True, hide_index=True)
@@ -355,3 +369,24 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+def render_web_map(region_scores: pd.DataFrame) -> None:
+    fig = px.scatter_mapbox(
+        region_scores,
+        lat="lat",
+        lon="lon",
+        color="avg_opportunity_score",
+        size="avg_opportunity_score",
+        hover_name="region",
+        hover_data={"avg_opportunity_score": ":.3f"},
+        zoom=5,
+        height=520,
+        color_continuous_scale="Blues",
+    )
+
+    fig.update_layout(
+        mapbox_style="open-street-map",
+        margin={"r": 0, "t": 40, "l": 0, "b": 0},
+        title="UK opportunity score by region",
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
