@@ -40,20 +40,6 @@ def _write_temp_csv(uploaded_bytes: bytes) -> Path:
     return tmp_path
 
 
-def _to_csv_bytes(rows: List[Dict[str, object]]) -> bytes:
-    import csv
-
-    if not rows:
-        return b""
-
-    buffer = io.StringIO()
-    fieldnames = list(rows[0].keys())
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
-    writer.writeheader()
-    writer.writerows(rows)
-    return buffer.getvalue().encode("utf-8")
-
-
 def _ensure_dataframe(ranked: object) -> pd.DataFrame:
     if isinstance(ranked, pd.DataFrame):
         return ranked.copy()
@@ -135,32 +121,87 @@ def _build_region_opportunity(df_view: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _extract_geo_regions(geo: dict, featureidkey: str) -> List[str]:
-    parts = featureidkey.split(".", 1)
-    if len(parts) != 2:
-        return []
-    _, key_path = parts
-    keys = key_path.split(".")
-    out: List[str] = []
+def _densify_ring_to_n_points(ring: List[List[float]], target_points: int) -> List[List[float]]:
+    """
+    Densifies a polygon ring so it has at least target_points vertices.
+    This is a schematic densification, not a true cartographic boundary.
+    """
+    if not ring:
+        return ring
 
-    for feat in geo.get("features", []):
-        cur = feat
-        ok = True
-        for k in keys:
-            if isinstance(cur, dict) and k in cur:
-                cur = cur[k]
-            else:
-                ok = False
-                break
-        if ok:
-            out.append(_normalise_region_label(cur))
-    return out
+    # Ensure ring is closed
+    if ring[0] != ring[-1]:
+        ring = ring + [ring[0]]
+
+    n = len(ring) - 1  # number of edges
+    if n <= 0:
+        return ring
+
+    # We want total vertices (including closing point) to be at least target_points + 1
+    desired_total = max(target_points + 1, len(ring))
+    extra_needed = desired_total - len(ring)
+    if extra_needed <= 0:
+        return ring
+
+    base_add = extra_needed // n
+    remainder = extra_needed % n
+
+    new_ring: List[List[float]] = []
+    for i in range(n):
+        x1, y1 = ring[i]
+        x2, y2 = ring[i + 1]
+
+        new_ring.append([float(x1), float(y1)])
+
+        add_here = base_add + (1 if i < remainder else 0)
+        for k in range(1, add_here + 1):
+            t = k / (add_here + 1)
+            xi = x1 + (x2 - x1) * t
+            yi = y1 + (y2 - y1) * t
+            new_ring.append([float(xi), float(yi)])
+
+    # Close ring
+    new_ring.append([float(ring[0][0]), float(ring[0][1])])
+    return new_ring
+
+
+def _densify_geojson_polygons(geo: dict, target_points: int = 20) -> dict:
+    """
+    Applies densification to Polygon and MultiPolygon geometries.
+    """
+    features = geo.get("features", [])
+    for feat in features:
+        geom = feat.get("geometry") or {}
+        gtype = geom.get("type")
+        coords = geom.get("coordinates")
+
+        if gtype == "Polygon" and isinstance(coords, list) and coords:
+            outer = coords[0]
+            coords[0] = _densify_ring_to_n_points(outer, target_points)
+            geom["coordinates"] = coords
+
+        elif gtype == "MultiPolygon" and isinstance(coords, list):
+            new_coords = []
+            for poly in coords:
+                if not poly:
+                    new_coords.append(poly)
+                    continue
+                outer = poly[0]
+                poly[0] = _densify_ring_to_n_points(outer, target_points)
+                new_coords.append(poly)
+            geom["coordinates"] = new_coords
+
+        feat["geometry"] = geom
+
+    geo["features"] = features
+    return geo
 
 
 def _render_uk_region_map(
     region_scores: pd.DataFrame,
     geojson_path: Path,
     featureidkey: str = "properties.region",
+    target_points: int = 20,
 ) -> None:
     if not geojson_path.exists():
         st.error(f"Missing GeoJSON file. Expected at: {geojson_path}")
@@ -170,23 +211,8 @@ def _render_uk_region_map(
         st.info("No region scores available to plot.")
         return
 
-    geo = json.loads(geojson_path.read_text(encoding="utf-8"))
-
-    geo_regions = set(_extract_geo_regions(geo, featureidkey))
-    data_regions = set(region_scores["region"].map(_normalise_region_label).tolist())
-
-    missing_in_geo = sorted([r for r in data_regions if r not in geo_regions and r != "Unknown"])
-    missing_in_data = sorted([r for r in geo_regions if r not in data_regions])
-
-    if missing_in_geo:
-        with st.expander("Map matching diagnostics"):
-            st.write("These region labels exist in your data but were not found in the GeoJSON:")
-            st.code("\n".join(missing_in_geo))
-
-    if missing_in_data:
-        with st.expander("Map matching diagnostics"):
-            st.write("These region labels exist in the GeoJSON but were not found in your data:")
-            st.code("\n".join(missing_in_data))
+    geo_raw = json.loads(geojson_path.read_text(encoding="utf-8"))
+    geo = _densify_geojson_polygons(geo_raw, target_points=target_points)
 
     fig = px.choropleth(
         region_scores,
@@ -199,10 +225,16 @@ def _render_uk_region_map(
         hover_data={"avg_opportunity_score": ":.3f"},
     )
 
-    fig.update_geos(fitbounds="locations", visible=False)
+    fig.update_geos(
+        fitbounds="locations",
+        visible=False,
+        center={"lat": 54.2, "lon": -2.5},
+        projection_scale=7,
+    )
     fig.update_layout(
         title="UK opportunity score by region",
         margin={"r": 0, "t": 45, "l": 0, "b": 0},
+        height=520,
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -217,7 +249,7 @@ def main() -> None:
     scoring_config_path = project_root / "src" / "heagital_mde" / "config" / "scoring_config.yml"
 
     geojson_path = project_root / "data" / "geo" / "nhs_england_regions.geojson"
-    geo_featureidkey = "properties.region"
+    geo_featureidkey_default = "properties.region"
 
     with st.sidebar:
         st.header("Step 1  Download template")
@@ -249,10 +281,9 @@ def main() -> None:
         top_n = st.number_input("Recommended cut off Top N", min_value=1, max_value=100, value=15, step=1)
 
         st.divider()
-        st.header("Outputs")
-        st.caption("UK map is based on regional average opportunity score.")
-        st.caption("Expected GeoJSON location: data/geo/uk_regions.geojson")
-        geo_featureidkey = st.text_input("GeoJSON featureidkey", value=geo_featureidkey)
+        st.header("Map settings")
+        geo_featureidkey = st.text_input("GeoJSON featureidkey", value=geo_featureidkey_default)
+        densify_points = st.number_input("Polygon points per region (schematic)", min_value=20, max_value=200, value=20, step=5)
 
         run = st.button("Run ranking", type="primary", disabled=(uploaded is None))
 
@@ -301,7 +332,12 @@ def main() -> None:
         st.dataframe(region_pivot, use_container_width=True, hide_index=True)
 
         st.subheader("UK region map")
-        _render_uk_region_map(region_scores, geojson_path=geojson_path, featureidkey=geo_featureidkey)
+        _render_uk_region_map(
+            region_scores,
+            geojson_path=geojson_path,
+            featureidkey=geo_featureidkey,
+            target_points=int(densify_points),
+        )
 
         st.subheader("Region opportunity score summary")
         st.dataframe(region_scores, use_container_width=True, hide_index=True)
