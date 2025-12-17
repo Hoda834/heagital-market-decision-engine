@@ -287,7 +287,7 @@ def main() -> None:
 
         run = st.button("Run ranking", type="primary", disabled=(uploaded is None))
 
-    if uploaded is None:
+if uploaded is None:
     st.info("Download the template, fill it, upload the CSV, then run the ranking.")
     return
 
