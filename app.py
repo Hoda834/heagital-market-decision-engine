@@ -288,34 +288,39 @@ def main() -> None:
         run = st.button("Run ranking", type="primary", disabled=(uploaded is None))
 
     if uploaded is None:
-        st.info("Download the template, fill it, upload the CSV, then run the ranking.")
-        return
+    st.info("Download the template, fill it, upload the CSV, then run the ranking.")
+    return
 
-    if not scoring_config_path.exists():
-        st.error("Missing scoring config. Expected at src/heagital_mde/config/scoring_config.yml")
-        return
+if not scoring_config_path.exists():
+    st.error("Missing scoring config. Expected at src/heagital_mde/config/scoring_config.yml")
+    return
 
-    if not run:
-        st.stop()
+if not run:
+    st.stop()
 
-    try:
-        data_path = _write_temp_csv(uploaded.getvalue())
+try:
+    data_path = _write_temp_csv(uploaded.getvalue())
 
-        df_in = load_icb_features(data_path)
-        validate_icb_features(df_in)
+    df_in = load_icb_features(data_path)
+    validate_icb_features(df_in)
 
-        ranked = score_and_rank(df_in, scoring_config_path)
-        df_ranked = _ensure_dataframe(ranked)
+    ranked = score_and_rank(df_in, scoring_config_path)
+    df_ranked = _ensure_dataframe(ranked)
 
-        df_ranked["recommended_cutoff_top_n"] = int(top_n)
-        df_ranked["recommended_included"] = df_ranked["rank"].astype(int) <= int(top_n)
+    df_ranked["recommended_cutoff_top_n"] = int(top_n)
+    df_ranked["recommended_included"] = df_ranked["rank"].astype(int) <= int(top_n)
 
-        csv_bytes = df_ranked.to_csv(index=False).encode("utf-8")
-        included_count = int(df_ranked["recommended_included"].sum())
+    csv_bytes = df_ranked.to_csv(index=False).encode("utf-8")
+    included_count = int(df_ranked["recommended_included"].sum())
 
-        region_pivot = _build_region_pivot(df_ranked)
-        region_scores = _build_region_opportunity(df_ranked)
-        REGION_CENTROIDS = {
+    region_pivot = _build_region_pivot(df_ranked)
+    region_scores = _build_region_opportunity(df_ranked)
+
+except Exception as e:
+    st.error(f"Run failed: {e}")
+    return
+
+REGION_CENTROIDS = {
     "North East and Yorkshire": {"lat": 54.8, "lon": -1.8},
     "North West": {"lat": 54.0, "lon": -2.8},
     "Midlands": {"lat": 52.8, "lon": -1.5},
@@ -325,46 +330,37 @@ def main() -> None:
     "South West": {"lat": 50.9, "lon": -3.5},
 }
 
-region_scores["lat"] = region_scores["region"].map(
-    lambda r: REGION_CENTROIDS.get(r, {}).get("lat")
-)
-region_scores["lon"] = region_scores["region"].map(
-    lambda r: REGION_CENTROIDS.get(r, {}).get("lon")
-)
+region_scores["lat"] = region_scores["region"].map(lambda r: REGION_CENTROIDS.get(str(r), {}).get("lat"))
+region_scores["lon"] = region_scores["region"].map(lambda r: REGION_CENTROIDS.get(str(r), {}).get("lon"))
+region_scores = region_scores.dropna(subset=["lat", "lon"]).reset_index(drop=True)
 
-region_scores = region_scores.dropna(subset=["lat", "lon"])
+st.success("Ranking completed.")
 
+c1, c2 = st.columns([2, 1], gap="large")
 
-    except Exception as e:
-        st.error(f"Run failed: {e}")
-        return
+with c1:
+    st.subheader("ICB ranking")
+    st.dataframe(df_ranked, use_container_width=True, hide_index=True)
 
-    st.success("Ranking completed.")
+    st.subheader("Regional pivot summary")
+    st.dataframe(region_pivot, use_container_width=True, hide_index=True)
 
-    c1, c2 = st.columns([2, 1], gap="large")
+    st.subheader("UK opportunity map (web)")
+    render_web_map(region_scores)
 
-    with c1:
-        st.subheader("ICB ranking")
-        st.dataframe(df_ranked, use_container_width=True, hide_index=True)
+    st.subheader("Region opportunity score summary")
+    st.dataframe(region_scores, use_container_width=True, hide_index=True)
 
-        st.subheader("Regional pivot summary")
-        st.dataframe(region_pivot, use_container_width=True, hide_index=True)
+with c2:
+    st.subheader("Download")
+    st.download_button(
+        label="Download ranking CSV",
+        data=csv_bytes,
+        file_name="icb_opportunity_ranking.csv",
+        mime="text/csv",
+    )
+    st.metric("Included ICBs", included_count)
 
-        st.subheader("UK opportunity map (web)")
-render_web_map(region_scores)
-
-        st.subheader("Region opportunity score summary")
-        st.dataframe(region_scores, use_container_width=True, hide_index=True)
-
-    with c2:
-        st.subheader("Download")
-        st.download_button(
-            label="Download ranking CSV",
-            data=csv_bytes,
-            file_name="icb_opportunity_ranking.csv",
-            mime="text/csv",
-        )
-        st.metric("Included ICBs", included_count)
 
 
 if __name__ == "__main__":
