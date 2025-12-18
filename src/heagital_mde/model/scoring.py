@@ -80,8 +80,13 @@ def _build_signals(df: pd.DataFrame) -> pd.DataFrame:
 def score_and_rank(
     df: pd.DataFrame,
     scoring_config_path: str | Path,
+    weights_override: WeightConfig | None = None,
 ) -> pd.DataFrame:
     weights, norm_cfg, top_n = load_scoring_config(scoring_config_path)
+
+    if weights_override is not None:
+        weights = weights_override
+
     weights = _normalise_weights_to_one(weights)
 
     base = _build_signals(df)
