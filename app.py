@@ -1,8 +1,7 @@
-import io
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -12,7 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parent / "src"))
 
 from heagital_mde.io.load_icb import load_icb_features
 from heagital_mde.io.validate import validate_icb_features
-from heagital_mde.model.scoring import score_and_rank
+from heagital_mde.model.scoring import WeightConfig, score_and_rank
 
 
 st.set_page_config(page_title="Heagital Market Decision Engine", layout="wide")
@@ -159,9 +158,7 @@ def render_web_map(region_scores_with_coords: pd.DataFrame) -> None:
 
 
 def prettify_columns_for_display(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
-    out = df.copy()
-    out = out.rename(columns=mapping)
-    return out
+    return df.copy().rename(columns=mapping)
 
 
 def main() -> None:
@@ -219,7 +216,9 @@ def main() -> None:
         df_in = load_icb_features(data_path)
         validate_icb_features(df_in)
 
-        ranked = score_and_rank(df_in, scoring_config_path)
+        weights_ui = WeightConfig(clinical_risk=float(w1), adoption_readiness=float(w2), procurement_friction=float(w3))
+        ranked = score_and_rank(df_in, scoring_config_path, weights_override=weights_ui)
+
         df_ranked = ensure_dataframe(ranked)
 
         df_ranked["recommended_cutoff_top_n"] = int(top_n)
@@ -262,17 +261,11 @@ def main() -> None:
         "avg_n_procurement_friction": "Average procurement friction score",
     }
 
-    display_region_scores_cols = {
-        "region": "Region",
-        "avg_opportunity_score": "Average opportunity score",
-        "lat": "Latitude",
-        "lon": "Longitude",
-    }
-
     df_ranked_display = prettify_columns_for_display(df_ranked, display_ranked_cols)
     region_pivot_display = prettify_columns_for_display(region_pivot, display_pivot_cols)
-    region_scores_display = prettify_columns_for_display(region_scores, {"region": "Region", "avg_opportunity_score": "Average opportunity score"})
-    region_scores_map_display = prettify_columns_for_display(region_scores_map, display_region_scores_cols)
+    region_scores_display = prettify_columns_for_display(
+        region_scores, {"region": "Region", "avg_opportunity_score": "Average opportunity score"}
+    )
 
     c1, c2 = st.columns([2, 1], gap="large")
 
@@ -288,9 +281,6 @@ def main() -> None:
 
         st.subheader("Region opportunity score summary")
         st.dataframe(region_scores_display, use_container_width=True, hide_index=True)
-
-        with st.expander("Map coordinates used"):
-            st.dataframe(region_scores_map_display, use_container_width=True, hide_index=True)
 
     with c2:
         st.subheader("Download")
