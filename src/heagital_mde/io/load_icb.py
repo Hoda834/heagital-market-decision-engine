@@ -42,12 +42,10 @@ def load_icb_features(path: str | Path, sheet_name: Optional[str] = None) -> pd.
     if not p.exists():
         raise FileNotFoundError(f"Input file not found: {p}")
 
-    if p.suffix.lower() in {".csv"}:
     suffix = p.suffix.lower()
 
     if suffix in {".csv", ""}:
         df_raw = pd.read_csv(p)
-    elif p.suffix.lower() in {".xlsx", ".xls"}:
     elif suffix in {".xlsx", ".xls"}:
         df_raw = pd.read_excel(p, sheet_name=sheet_name if sheet_name else 0)
     else:
