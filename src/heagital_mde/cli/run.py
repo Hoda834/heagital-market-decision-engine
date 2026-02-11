@@ -12,7 +12,6 @@ from heagital_mde.model.scoring import score_and_rank
 def main() -> None:
     project_root = Path(__file__).resolve().parents[3]
 
-    input_data_path = project_root / "data" / "raw" / "data.csv"
     input_data_path = project_root / "data" / "raw"
     scoring_config_path = project_root / "src" / "heagital_mde" / "config" / "scoring_config.yml"
 
