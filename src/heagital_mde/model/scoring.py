@@ -92,6 +92,8 @@ def _normalise_weights_to_one_readiness(w: ReadinessWeightConfig) -> ReadinessWe
 def _build_signals(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
+    out = out.rename(columns={"af_register": "register"})
+
     required = ["register", "prevalence", "treatment_gap", "warfarin_proxy"]
     missing = [c for c in required if c not in out.columns]
     if missing:
