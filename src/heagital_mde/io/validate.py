@@ -27,7 +27,7 @@ def validate_icb_features(df: pd.DataFrame) -> None:
     if (df["af_register"] < 0).any():
         raise ValueError("af_register contains negative values.")
 
-        if df["prevalence"].isna().any():
+    if df["prevalence"].isna().any():
         raise ValueError("prevalence contains missing values after parsing.")
     if (df["prevalence"] < 0).any():
         raise ValueError("prevalence contains negative values.")
