@@ -8,6 +8,7 @@ CANONICAL_COLUMNS: Tuple[str, ...] = (
     "icb_code",
     "icb_name",
     "af_register",
+    "prevalence",
     "treatment_gap",
     "warfarin_proxy",
     "region",
@@ -17,6 +18,7 @@ REQUIRED_CANONICAL_COLUMNS: Tuple[str, ...] = (
     "icb_code",
     "icb_name",
     "af_register",
+    "prevalence",
     "treatment_gap",
     "warfarin_proxy",
 )
@@ -25,6 +27,7 @@ RAW_TO_CANONICAL_MAP: Dict[str, str] = {
     "ICB ODS code": "icb_code",
     "ICB name": "icb_name",
     "Register": "af_register",
+    "Prevalence (%)": "prevalence",
     "Treatment Gap (%)": "treatment_gap",
     "Warfarin Item icb": "warfarin_proxy",
     "Region": "region",
