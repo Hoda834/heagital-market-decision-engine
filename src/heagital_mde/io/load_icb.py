@@ -43,8 +43,12 @@ def load_icb_features(path: str | Path, sheet_name: Optional[str] = None) -> pd.
         raise FileNotFoundError(f"Input file not found: {p}")
 
     if p.suffix.lower() in {".csv"}:
+    suffix = p.suffix.lower()
+
+    if suffix in {".csv", ""}:
         df_raw = pd.read_csv(p)
     elif p.suffix.lower() in {".xlsx", ".xls"}:
+    elif suffix in {".xlsx", ".xls"}:
         df_raw = pd.read_excel(p, sheet_name=sheet_name if sheet_name else 0)
     else:
         raise ValueError("Unsupported file type. Please provide a .csv, .xlsx, or .xls file.")
@@ -64,6 +68,7 @@ def load_icb_features(path: str | Path, sheet_name: Optional[str] = None) -> pd.
     df["region"] = df["region"].astype(str).str.strip()
 
     df["af_register"] = _parse_int_with_commas(df["af_register"])
+    df["prevalence"] = _parse_float(df["prevalence"])
     df["warfarin_proxy"] = _parse_float(df["warfarin_proxy"])
 
     gap_pct = _parse_float(df["treatment_gap"])
