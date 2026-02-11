@@ -13,9 +13,12 @@ def main() -> None:
     project_root = Path(__file__).resolve().parents[3]
 
     input_data_path = project_root / "data" / "raw" / "data.csv"
+    input_data_path = project_root / "data" / "raw"
     scoring_config_path = project_root / "src" / "heagital_mde" / "config" / "scoring_config.yml"
 
     output_dir = project_root / "data" / "outputs" / "rankings"
+    if output_dir.exists() and output_dir.is_file():
+        output_dir.unlink()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("Loading ICB data...")
