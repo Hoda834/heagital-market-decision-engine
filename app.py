@@ -11,8 +11,7 @@ sys.path.append(str(Path(__file__).resolve().parent / "src"))
 
 from heagital_mde.io.load_icb import load_icb_features
 from heagital_mde.io.validate import validate_icb_features
-from heagital_mde.model.scoring import WeightConfig, score_and_rank
-from heagital_mde.model.scoring import ReadinessWeightConfig, score_and_rank
+from heagital_mde.model.scoring import MarketWeightConfig, ReadinessWeightConfig, score_and_rank
 
 
 st.set_page_config(page_title="Heagital Market Decision Engine", layout="wide")
@@ -98,7 +97,6 @@ def build_region_pivot(df_view: pd.DataFrame) -> pd.DataFrame:
     pivot["included_rate"] = (pivot["included_rate"] * 100.0).round(1)
 
     pivot = pivot.sort_values(
-        by=["included_icbs", "avg_opportunity_score", "total_icbs"],
         by=["included_icbs", "avg_final_score", "total_icbs"],
         ascending=[False, False, False],
         kind="mergesort",
@@ -110,7 +108,6 @@ def build_region_pivot(df_view: pd.DataFrame) -> pd.DataFrame:
 def build_region_opportunity(df_view: pd.DataFrame) -> pd.DataFrame:
     df = df_view.copy()
 
-    required = {"region", "opportunity_score"}
     required = {"region", "final_score"}
     missing = [c for c in required if c not in df.columns]
     if missing:
@@ -125,9 +122,6 @@ def build_region_opportunity(df_view: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
 
-    out["avg_opportunity_score"] = pd.to_numeric(out["avg_opportunity_score"], errors="coerce")
-    out = out.dropna(subset=["avg_opportunity_score"]).reset_index(drop=True)
-    out = out.sort_values(by="avg_opportunity_score", ascending=False, kind="mergesort").reset_index(drop=True)
     out["avg_final_score"] = pd.to_numeric(out["avg_final_score"], errors="coerce")
     out = out.dropna(subset=["avg_final_score"]).reset_index(drop=True)
     out = out.sort_values(by="avg_final_score", ascending=False, kind="mergesort").reset_index(drop=True)
@@ -157,12 +151,9 @@ def render_web_map(region_scores_with_coords: pd.DataFrame) -> None:
         region_scores_with_coords,
         lat="lat",
         lon="lon",
-        color="avg_opportunity_score",
-        size="avg_opportunity_score",
         color="avg_final_score",
         size="avg_final_score",
         hover_name="region",
-        hover_data={"avg_opportunity_score": ":.3f"},
         hover_data={"avg_final_score": ":.3f"},
         zoom=5,
         height=520,
@@ -188,12 +179,25 @@ def main() -> None:
     project_root = Path(__file__).resolve().parent
     template_path = project_root / "data" / "template" / "icb_input_template.csv"
     scoring_config_path = project_root / "src" / "heagital_mde" / "config" / "scoring_config.yml"
-
-@@ -194,99 +196,116 @@ def main() -> None:
-        w3 = st.slider("Procurement friction weight", 0.0, 1.0, 0.20, 0.01)
+    template_bytes = read_template_bytes(template_path)
+    
+        st.download_button(
+            label="Download input template (CSV)",
+            data=template_bytes,
+            file_name="icb_input_template.csv",
+            mime="text/csv",
+        )
+    
+        uploaded = st.file_uploader("Upload completed ICB CSV", type=["csv"])
+    
+        with st.expander("Weight controls", expanded=True):
+            w1 = st.slider("AF register weight", 0.0, 1.0, 0.30, 0.01)
+            w2 = st.slider("Prevalence weight", 0.0, 1.0, 0.20, 0.01)
+            w3 = st.slider("Treatment gap weight", 0.0, 1.0, 0.30, 0.01)
+            w4 = st.slider("Warfarin proxy weight", 0.0, 1.0, 0.20, 0.01)
 
         w1n, w2n, w3n = normalise_weights_to_one(w1, w2, w3)
-        st.caption(f"Normalised weights: clinical {w1n:.2f}, adoption {w2n:.2f}, friction {w3n:.2f}")
+        st.caption(f"Normalised first three weights: register {w1n:.2f}, prevalence {w2n:.2f}, treatment gap {w3n:.2f}")
 
         top_n = st.number_input("Recommended cut off Top N", min_value=1, max_value=100, value=15, step=1)
         run = st.button("Run ranking", type="primary", disabled=(uploaded is None))
@@ -215,20 +219,24 @@ def main() -> None:
         df_in = load_icb_features(data_path)
         validate_icb_features(df_in)
 
-        weights_ui = WeightConfig(clinical_risk=float(w1), adoption_readiness=float(w2), procurement_friction=float(w3))
-        ranked = score_and_rank(df_in, scoring_config_path, weights_override=weights_ui)
-        readiness_total = w2 + w3
-        if readiness_total <= 0:
-            readiness_weights = ReadinessWeightConfig(treatment_gap=0.5, warfarin_proxy=0.5)
+        market_weights = MarketWeightConfig(
+            register=float(w1),
+            prevalence=float(w2),
+            treatment_gap=float(w3),
+            warfarin_proxy=float(w4),
+        )
+
+        if w4 <= 0:
+            readiness_weights = ReadinessWeightConfig(treatment_gap=1.0, warfarin_proxy=0.0)
+        elif w4 >= 1:
+            readiness_weights = ReadinessWeightConfig(treatment_gap=0.0, warfarin_proxy=1.0)
         else:
-            readiness_weights = ReadinessWeightConfig(
-                treatment_gap=float(w2 / readiness_total),
-                warfarin_proxy=float(w3 / readiness_total),
-            )
+             readiness_weights = ReadinessWeightConfig(treatment_gap=float(1.0 - w4), warfarin_proxy=float(w4))
 
         ranked = score_and_rank(
             df_in,
             scoring_config_path,
+            market_weights_override=market_weights,
             readiness_weights_override=readiness_weights,
             alpha_override=float(w1n),
         )
@@ -256,17 +264,13 @@ def main() -> None:
         "icb_code": "ICB Code",
         "icb_name": "ICB Name",
         "region": "Region",
-        "opportunity_score": "Opportunity Score",
-        "n_clinical_risk": "Clinical risk score",
-        "n_adoption_readiness": "Adoption readiness score",
-        "n_procurement_friction": "Procurement friction score",
-        "final_score": "Final score",
-        "market_score": "Market score",
-        "readiness_score": "Readiness score",
         "n_register": "Normalised register",
         "n_prevalence": "Normalised prevalence",
         "n_treatment_gap": "Normalised treatment gap",
         "n_warfarin_proxy": "Normalised warfarin proxy",
+        "final_score": "Final score",
+        "market_score": "Market score",
+        "readiness_score": "Readiness score",
         "recommended_cutoff_top_n": "Top N cut off",
         "recommended_included": "Included in Top N",
     }
@@ -276,21 +280,16 @@ def main() -> None:
         "total_icbs": "Total ICBs",
         "included_icbs": "ICBs included in Top N",
         "included_rate": "Inclusion rate (percent)",
-        "avg_opportunity_score": "Average opportunity score",
-        "avg_n_clinical_risk": "Average clinical risk score",
-        "avg_n_adoption_readiness": "Average adoption readiness score",
-        "avg_n_procurement_friction": "Average procurement friction score",
-        "avg_final_score": "Average final score",
         "avg_n_register": "Average normalised register",
         "avg_n_prevalence": "Average normalised prevalence",
         "avg_n_treatment_gap": "Average normalised treatment gap",
         "avg_n_warfarin_proxy": "Average normalised warfarin proxy",
+         "avg_final_score": "Average final score",
     }
 
     df_ranked_display = prettify_columns_for_display(df_ranked, display_ranked_cols)
     region_pivot_display = prettify_columns_for_display(region_pivot, display_pivot_cols)
     region_scores_display = prettify_columns_for_display(
-        region_scores, {"region": "Region", "avg_opportunity_score": "Average opportunity score"}
         region_scores, {"region": "Region", "avg_final_score": "Average final score"}
     )
 
@@ -316,4 +315,8 @@ def main() -> None:
             data=csv_bytes,
             file_name="icb_opportunity_ranking.csv",
             mime="text/csv",
-        )
+        )    
+    
+
+if __name__ == "__main__":
+    main()
