@@ -1,24 +1,59 @@
+# Strategic scenarios used for sensitivity analysis.
+#
+# Each scenario perturbs the base configuration in scoring_config.yml. Deltas
+# are additive on the pre-normalisation weights; each block is renormalised to
+# sum to 1 afterwards, so a delta expresses relative emphasis, not an absolute
+# weight. alpha_delta and friction_weight_delta are clamped into [0, 1].
+#
+# Run them all with:  python -m heagital_mde.cli.run --scenarios
+
 base_case:
-  weight_adjustments:
-    clinical_risk: 0.0
-    adoption_readiness: 0.0
-    procurement_friction: 0.0
+  description: >-
+    The configuration exactly as written in scoring_config.yml. Included so
+    that every comparison has an unperturbed reference point.
 
 nice_tightening:
-  weight_adjustments:
-    clinical_risk: 0.15
-    adoption_readiness: -0.05
-    procurement_friction: -0.10
+  description: >-
+    Tighter NICE guidance raises the clinical imperative to close the
+    anticoagulation gap. Shifts emphasis onto treatment gap and prevalence, and
+    towards market size over readiness.
+  alpha_delta: 0.10
+  market_weight_deltas:
+    treatment_gap: 0.15
+    prevalence: 0.05
+    register: -0.05
+  readiness_weight_deltas:
+    treatment_gap: 0.10
 
 warfarin_decline:
-  weight_adjustments:
-    clinical_risk: -0.10
-    adoption_readiness: -0.20
-    procurement_friction: 0.30
+  description: >-
+    Faster background switching away from warfarin erodes the switchable pool,
+    so the warfarin proxy loses predictive value and execution capability
+    matters more than headline market size.
+  alpha_delta: -0.15
+  market_weight_deltas:
+    warfarin_proxy: -0.15
+    register: 0.10
+  readiness_weight_deltas:
+    warfarin_proxy: -0.15
+    digital_maturity: 0.10
 
 community_testing_expansion:
-  weight_adjustments:
-    clinical_risk: 0.0
-    adoption_readiness: 0.10
-    procurement_friction: -0.20
+  description: >-
+    Wider community detection lifts diagnosis rates, favouring ICBs that can
+    operationalise a pathway quickly. Weights readiness up and procurement
+    friction down.
+  alpha_delta: -0.10
+  friction_weight_delta: -0.10
+  readiness_weight_deltas:
+    digital_maturity: 0.15
 
+procurement_squeeze:
+  description: >-
+    Budget pressure makes procurement friction the binding constraint. Doubles
+    down on the friction penalty and rewards ICBs that are easy to transact
+    with over ICBs that are merely large.
+  alpha_delta: -0.10
+  friction_weight_delta: 0.25
+  market_weight_deltas:
+    register: -0.05

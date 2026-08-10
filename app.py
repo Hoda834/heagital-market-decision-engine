@@ -1,322 +1,485 @@
+from __future__ import annotations
+
+import json
 import sys
 import tempfile
+import warnings
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional
 
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-sys.path.append(str(Path(__file__).resolve().parent / "src"))
+PROJECT_ROOT = Path(__file__).resolve().parent
+SRC_DIR = PROJECT_ROOT / "src"
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
 
-from heagital_mde.io.load_icb import load_icb_features
-from heagital_mde.io.validate import validate_icb_features
-from heagital_mde.model.scoring import MarketWeightConfig, ReadinessWeightConfig, score_and_rank
+from heagital_mde import __version__  # noqa: E402
+from heagital_mde.io.load_icb import load_icb_features  # noqa: E402
+from heagital_mde.io.validate import ValidationError, check_icb_features  # noqa: E402
+from heagital_mde.model.scenarios import build_sensitivity, load_scenarios, run_scenarios  # noqa: E402
+from heagital_mde.model.scoring import ScoringResult, score_and_rank  # noqa: E402
+from heagital_mde.model.scoring.schema import (  # noqa: E402
+    MarketWeightConfig,
+    ReadinessWeightConfig,
+    load_scoring_config,
+)
 
+TEMPLATE_PATH = PROJECT_ROOT / "data" / "template" / "icb_input_template.csv"
+SCORING_CONFIG_PATH = PROJECT_ROOT / "src" / "heagital_mde" / "config" / "scoring_config.yml"
+SCENARIO_CONFIG_PATH = PROJECT_ROOT / "src" / "heagital_mde" / "config" / "scenarios.yml"
+GEOJSON_PATH = PROJECT_ROOT / "data" / "geo" / "nhs_england_regions.geojson"
+
+REGION_CENTROIDS: Dict[str, Dict[str, float]] = {
+    "North East and Yorkshire": {"lat": 54.8, "lon": -1.8},
+    "North West": {"lat": 54.0, "lon": -2.8},
+    "Midlands": {"lat": 52.8, "lon": -1.5},
+    "East of England": {"lat": 52.3, "lon": 0.5},
+    "London": {"lat": 51.5, "lon": -0.1},
+    "South East": {"lat": 51.2, "lon": 0.8},
+    "South West": {"lat": 50.9, "lon": -3.5},
+}
 
 st.set_page_config(page_title="Heagital Market Decision Engine", layout="wide")
 
 
-def normalise_weights_to_one(w1: float, w2: float, w3: float) -> Tuple[float, float, float]:
-    total = w1 + w2 + w3
-    if total <= 0:
-        return 0.45, 0.35, 0.20
-    return w1 / total, w2 / total, w3 / total
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 def read_template_bytes(template_path: Path) -> bytes:
-    if not template_path.exists():
-        return b""
-    return template_path.read_bytes()
+    return template_path.read_bytes() if template_path.exists() else b""
 
 
 def write_temp_csv(uploaded_bytes: bytes) -> Path:
-    tmp_dir = Path(tempfile.mkdtemp())
-    tmp_path = tmp_dir / "uploaded_data.csv"
+    tmp_path = Path(tempfile.mkdtemp()) / "uploaded_data.csv"
     tmp_path.write_bytes(uploaded_bytes)
     return tmp_path
 
 
-def ensure_dataframe(ranked: object) -> pd.DataFrame:
-    if isinstance(ranked, pd.DataFrame):
-        return ranked.copy()
-    if isinstance(ranked, list):
-        return pd.DataFrame(ranked)
-    raise TypeError("Unsupported results type returned by score_and_rank.")
-
-
-def normalise_region_label(x: object) -> str:
-    if x is None or (isinstance(x, float) and pd.isna(x)):
+def normalise_region_label(value: object) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)) or pd.isna(value):
         return "Unknown"
-    return str(x).strip()
+    text = str(value).strip()
+    return text if text else "Unknown"
+
+
+def normalised_signal_columns(df: pd.DataFrame) -> list[str]:
+    """The n_* columns actually produced for this run."""
+    return [c for c in df.columns if c.startswith("n_")]
 
 
 def build_region_pivot(df_view: pd.DataFrame) -> pd.DataFrame:
-    df = df_view.copy()
+    """Per-region rollup of inclusion rate and mean scores.
 
-    required = {
-        "region",
-        "icb_code",
-        "recommended_included",
-        "opportunity_score",
-        "n_clinical_risk",
-        "n_adoption_readiness",
-        "n_procurement_friction",
-        "final_score",
-        "n_register",
-        "n_prevalence",
-        "n_treatment_gap",
-        "n_warfarin_proxy",
-    }
-    missing = [c for c in required if c not in df.columns]
+    Aggregates over whichever normalised signals the run produced, so an input
+    file without the optional readiness columns still summarises cleanly.
+    """
+    required = ["region", "icb_code", "recommended_included", "final_score"]
+    missing = [c for c in required if c not in df_view.columns]
     if missing:
         raise ValueError(f"Cannot build regional summary. Missing columns: {missing}")
 
+    df = df_view.copy()
     df["region"] = df["region"].map(normalise_region_label)
     df["recommended_included"] = df["recommended_included"].astype(bool)
 
-    pivot = (
-        df.groupby("region", dropna=False)
-        .agg(
-            total_icbs=("icb_code", "count"),
-            included_icbs=("recommended_included", "sum"),
-            included_rate=("recommended_included", "mean"),
-            avg_opportunity_score=("opportunity_score", "mean"),
-            avg_n_clinical_risk=("n_clinical_risk", "mean"),
-            avg_n_adoption_readiness=("n_adoption_readiness", "mean"),
-            avg_n_procurement_friction=("n_procurement_friction", "mean"),
-            avg_final_score=("final_score", "mean"),
-            avg_n_register=("n_register", "mean"),
-            avg_n_prevalence=("n_prevalence", "mean"),
-            avg_n_treatment_gap=("n_treatment_gap", "mean"),
-            avg_n_warfarin_proxy=("n_warfarin_proxy", "mean"),
-        )
-        .reset_index()
-    )
+    aggregations: Dict[str, tuple] = {
+        "total_icbs": ("icb_code", "count"),
+        "included_icbs": ("recommended_included", "sum"),
+        "included_rate": ("recommended_included", "mean"),
+        "avg_final_score": ("final_score", "mean"),
+    }
+    for score_col in ("market_score", "readiness_score"):
+        if score_col in df.columns:
+            aggregations[f"avg_{score_col}"] = (score_col, "mean")
+    for signal_col in normalised_signal_columns(df):
+        aggregations[f"avg_{signal_col}"] = (signal_col, "mean")
 
+    pivot = df.groupby("region", dropna=False).agg(**aggregations).reset_index()
     pivot["included_rate"] = (pivot["included_rate"] * 100.0).round(1)
 
-    pivot = pivot.sort_values(
+    return pivot.sort_values(
         by=["included_icbs", "avg_final_score", "total_icbs"],
         ascending=[False, False, False],
         kind="mergesort",
     ).reset_index(drop=True)
 
-    return pivot
 
-
-def build_region_opportunity(df_view: pd.DataFrame) -> pd.DataFrame:
-    df = df_view.copy()
-
-    required = {"region", "final_score"}
-    missing = [c for c in required if c not in df.columns]
+def build_region_scores(df_view: pd.DataFrame) -> pd.DataFrame:
+    """Mean final score per region, highest first."""
+    missing = [c for c in ("region", "final_score") if c not in df_view.columns]
     if missing:
-        raise ValueError(f"Cannot build region opportunity summary. Missing columns: {missing}")
+        raise ValueError(f"Cannot build region score summary. Missing columns: {missing}")
 
+    df = df_view.copy()
     df["region"] = df["region"].map(normalise_region_label)
 
-    out = (
-        df.groupby("region", dropna=False)
-        .agg(avg_opportunity_score=("opportunity_score", "mean"))
-        .agg(avg_final_score=("final_score", "mean"))
-        .reset_index()
-    )
-
+    out = df.groupby("region", dropna=False).agg(avg_final_score=("final_score", "mean")).reset_index()
     out["avg_final_score"] = pd.to_numeric(out["avg_final_score"], errors="coerce")
     out = out.dropna(subset=["avg_final_score"]).reset_index(drop=True)
-    out = out.sort_values(by="avg_final_score", ascending=False, kind="mergesort").reset_index(drop=True)
-    return out
+    return out.sort_values(by="avg_final_score", ascending=False, kind="mergesort").reset_index(drop=True)
 
 
 def apply_region_centroids(region_scores: pd.DataFrame) -> pd.DataFrame:
-    centroids = {
-        "North East and Yorkshire": {"lat": 54.8, "lon": -1.8},
-        "North West": {"lat": 54.0, "lon": -2.8},
-        "Midlands": {"lat": 52.8, "lon": -1.5},
-        "East of England": {"lat": 52.3, "lon": 0.5},
-        "London": {"lat": 51.5, "lon": -0.1},
-        "South East": {"lat": 51.2, "lon": 0.8},
-        "South West": {"lat": 50.9, "lon": -3.5},
-    }
-
     df = region_scores.copy()
-    df["lat"] = df["region"].map(lambda r: centroids.get(str(r), {}).get("lat"))
-    df["lon"] = df["region"].map(lambda r: centroids.get(str(r), {}).get("lon"))
-    df = df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
-    return df
+    df["lat"] = df["region"].map(lambda r: REGION_CENTROIDS.get(str(r), {}).get("lat"))
+    df["lon"] = df["region"].map(lambda r: REGION_CENTROIDS.get(str(r), {}).get("lon"))
+    return df.dropna(subset=["lat", "lon"]).reset_index(drop=True)
 
 
-def render_web_map(region_scores_with_coords: pd.DataFrame) -> None:
-    fig = px.scatter_mapbox(
-        region_scores_with_coords,
-        lat="lat",
-        lon="lon",
-        color="avg_final_score",
-        size="avg_final_score",
-        hover_name="region",
-        hover_data={"avg_final_score": ":.3f"},
-        zoom=5,
-        height=520,
-    )
+def load_region_geojson(path: Path) -> Optional[dict]:
+    """Load region boundaries, or None when the file is absent or a placeholder."""
+    if not path.exists() or path.stat().st_size < 32:
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) and data.get("features") else None
 
-    fig.update_layout(
-        mapbox_style="open-street-map",
-        margin={"r": 0, "t": 40, "l": 0, "b": 0},
-        title="UK opportunity score by region",
-    )
 
+def geojson_name_key(geojson: dict) -> Optional[str]:
+    """Find the property holding the region name."""
+    properties = geojson["features"][0].get("properties", {})
+    for candidate in ("nhser22nm", "nhser21nm", "name", "NAME", "region", "Region"):
+        if candidate in properties:
+            return candidate
+    for key, value in properties.items():
+        if isinstance(value, str):
+            return key
+    return None
+
+
+def render_map(region_scores: pd.DataFrame) -> None:
+    """Choropleth when real boundaries exist, otherwise a centroid bubble map."""
+    if region_scores.empty:
+        st.info("No regional scores to map. Add a Region column to the input file.")
+        return
+
+    geojson = load_region_geojson(GEOJSON_PATH)
+    name_key = geojson_name_key(geojson) if geojson else None
+
+    if geojson and name_key:
+        fig = px.choropleth_mapbox(
+            region_scores,
+            geojson=geojson,
+            locations="region",
+            featureidkey=f"properties.{name_key}",
+            color="avg_final_score",
+            color_continuous_scale="Viridis",
+            mapbox_style="carto-positron",
+            center={"lat": 52.8, "lon": -1.5},
+            zoom=4.6,
+            opacity=0.75,
+            height=520,
+        )
+    else:
+        with_coords = apply_region_centroids(region_scores)
+        if with_coords.empty:
+            st.info(
+                "Region names do not match the known NHS England regions, so the map cannot be drawn. "
+                "The regional tables below are unaffected."
+            )
+            return
+        fig = px.scatter_mapbox(
+            with_coords,
+            lat="lat",
+            lon="lon",
+            color="avg_final_score",
+            size="avg_final_score",
+            hover_name="region",
+            hover_data={"avg_final_score": ":.3f", "lat": False, "lon": False},
+            color_continuous_scale="Viridis",
+            zoom=5,
+            height=520,
+        )
+        fig.update_layout(mapbox_style="carto-positron")
+        st.caption(
+            "Showing region centroids. Drop a populated NHS England region GeoJSON at "
+            "`data/geo/nhs_england_regions.geojson` to switch to boundary shading."
+        )
+
+    fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0}, title="Average final score by NHS region")
     st.plotly_chart(fig, use_container_width=True)
 
 
 def prettify_columns_for_display(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
-    return df.copy().rename(columns=mapping)
+    return df.rename(columns=mapping)
+
+
+def humanise(column: str) -> str:
+    label = column.replace("avg_n_", "Average normalised ").replace("avg_", "Average ")
+    label = label.replace("n_", "Normalised ").replace("_", " ")
+    return label[0].upper() + label[1:]
+
+
+# ---------------------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------------------
+
+
+def render_sidebar(default_top_n: int, default_alpha: float, default_friction: float) -> dict:
+    controls: dict = {}
+
+    with st.sidebar:
+        st.header("1. Input data")
+        st.download_button(
+            label="Download input template (CSV)",
+            data=read_template_bytes(TEMPLATE_PATH),
+            file_name="icb_input_template.csv",
+            mime="text/csv",
+            disabled=not TEMPLATE_PATH.exists(),
+        )
+        controls["uploaded"] = st.file_uploader("Upload completed ICB CSV", type=["csv"])
+        controls["gap_units"] = st.selectbox(
+            "Treatment gap units",
+            options=("auto", "percent", "fraction"),
+            index=0,
+            help="'auto' infers from the observed range. Set explicitly if your file mixes conventions.",
+        )
+
+        st.header("2. Market weights")
+        st.caption("Relative emphasis within the market pillar. Rescaled to sum to 1.")
+        controls["w_register"] = st.slider("AF register size", 0.0, 1.0, 0.30, 0.01)
+        controls["w_prevalence"] = st.slider("Prevalence", 0.0, 1.0, 0.20, 0.01)
+        controls["w_gap_market"] = st.slider("Treatment gap", 0.0, 1.0, 0.30, 0.01)
+        controls["w_warfarin_market"] = st.slider("Warfarin proxy", 0.0, 1.0, 0.20, 0.01)
+
+        st.header("3. Readiness weights")
+        st.caption("Relative emphasis within the readiness pillar. Rescaled to sum to 1.")
+        controls["w_gap_readiness"] = st.slider("Treatment gap ", 0.0, 1.0, 0.35, 0.01)
+        controls["w_warfarin_readiness"] = st.slider("Warfarin proxy ", 0.0, 1.0, 0.25, 0.01)
+        controls["w_digital"] = st.slider("Digital maturity", 0.0, 1.0, 0.40, 0.01)
+
+        st.header("4. Decision parameters")
+        controls["alpha"] = st.slider(
+            "Alpha: market vs readiness",
+            0.0,
+            1.0,
+            float(default_alpha),
+            0.01,
+            help="1.0 ranks purely on market size, 0.0 purely on adoption readiness.",
+        )
+        controls["friction_weight"] = st.slider(
+            "Procurement friction penalty",
+            0.0,
+            1.0,
+            float(default_friction),
+            0.01,
+            help="Applied only when the input file has a Procurement Friction column.",
+        )
+        controls["top_n"] = int(
+            st.number_input("Recommended cut-off (Top N)", min_value=1, max_value=100, value=int(default_top_n), step=1)
+        )
+        controls["run_scenarios"] = st.checkbox("Run scenario sensitivity", value=True)
+
+        controls["run"] = st.button("Run ranking", type="primary", disabled=controls["uploaded"] is None)
+
+    return controls
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
     st.title("Heagital Market Decision Engine")
-    st.caption("Upload an ICB level dataset using the provided template. Then run the ranking and review results.")
+    st.caption(
+        f"v{__version__} — upload an ICB-level dataset using the provided template, "
+        "set the decision parameters, then run the ranking."
+    )
 
-    project_root = Path(__file__).resolve().parent
-    template_path = project_root / "data" / "template" / "icb_input_template.csv"
-    scoring_config_path = project_root / "src" / "heagital_mde" / "config" / "scoring_config.yml"
-    template_bytes = read_template_bytes(template_path)
-    
-        st.download_button(
-            label="Download input template (CSV)",
-            data=template_bytes,
-            file_name="icb_input_template.csv",
-            mime="text/csv",
-        )
-    
-        uploaded = st.file_uploader("Upload completed ICB CSV", type=["csv"])
-    
-        with st.expander("Weight controls", expanded=True):
-            w1 = st.slider("AF register weight", 0.0, 1.0, 0.30, 0.01)
-            w2 = st.slider("Prevalence weight", 0.0, 1.0, 0.20, 0.01)
-            w3 = st.slider("Treatment gap weight", 0.0, 1.0, 0.30, 0.01)
-            w4 = st.slider("Warfarin proxy weight", 0.0, 1.0, 0.20, 0.01)
-
-        w1n, w2n, w3n = normalise_weights_to_one(w1, w2, w3)
-        st.caption(f"Normalised first three weights: register {w1n:.2f}, prevalence {w2n:.2f}, treatment gap {w3n:.2f}")
-
-        top_n = st.number_input("Recommended cut off Top N", min_value=1, max_value=100, value=15, step=1)
-        run = st.button("Run ranking", type="primary", disabled=(uploaded is None))
-
-    if uploaded is None:
-        st.info("Download the template, fill it, upload the CSV, then run the ranking.")
+    if not SCORING_CONFIG_PATH.exists():
+        st.error(f"Missing scoring config. Expected at {SCORING_CONFIG_PATH.relative_to(PROJECT_ROOT)}")
         return
-
-    if not scoring_config_path.exists():
-        st.error("Missing scoring config. Expected at src/heagital_mde/config/scoring_config.yml")
-        return
-
-    if not run:
-        st.stop()
 
     try:
-        data_path = write_temp_csv(uploaded.getvalue())
-
-        df_in = load_icb_features(data_path)
-        validate_icb_features(df_in)
-
-        market_weights = MarketWeightConfig(
-            register=float(w1),
-            prevalence=float(w2),
-            treatment_gap=float(w3),
-            warfarin_proxy=float(w4),
-        )
-
-        if w4 <= 0:
-            readiness_weights = ReadinessWeightConfig(treatment_gap=1.0, warfarin_proxy=0.0)
-        elif w4 >= 1:
-            readiness_weights = ReadinessWeightConfig(treatment_gap=0.0, warfarin_proxy=1.0)
-        else:
-             readiness_weights = ReadinessWeightConfig(treatment_gap=float(1.0 - w4), warfarin_proxy=float(w4))
-
-        ranked = score_and_rank(
-            df_in,
-            scoring_config_path,
-            market_weights_override=market_weights,
-            readiness_weights_override=readiness_weights,
-            alpha_override=float(w1n),
-        )
-
-        df_ranked = ensure_dataframe(ranked)
-
-        df_ranked["recommended_cutoff_top_n"] = int(top_n)
-        df_ranked["recommended_included"] = df_ranked["rank"].astype(int) <= int(top_n)
-
-        csv_bytes = df_ranked.to_csv(index=False).encode("utf-8")
-        included_count = int(df_ranked["recommended_included"].sum())
-
-        region_pivot = build_region_pivot(df_ranked)
-        region_scores = build_region_opportunity(df_ranked)
-        region_scores_map = apply_region_centroids(region_scores)
-
-    except Exception as e:
-        st.error(f"Run failed: {e}")
+        base_config = load_scoring_config(SCORING_CONFIG_PATH)
+    except (ValueError, FileNotFoundError) as exc:
+        st.error(f"Scoring config could not be loaded: {exc}")
         return
 
-    st.success("Ranking completed.")
+    controls = render_sidebar(base_config.top_n, base_config.alpha, base_config.friction_weight)
+
+    if controls["uploaded"] is None:
+        st.info("Download the template from the sidebar, fill it in, upload the CSV, then run the ranking.")
+        st.subheader("How the score is built")
+        st.markdown(
+            "```\n"
+            "final = alpha x market + (1 - alpha) x readiness - friction_weight x friction\n"
+            "```\n"
+            "- **market** — register size, prevalence, treatment gap, warfarin proxy\n"
+            "- **readiness** — treatment gap, warfarin proxy, digital maturity *(optional column)*\n"
+            "- **friction** — procurement friction *(optional column)*\n\n"
+            "Optional columns may be left out of the file; the engine redistributes their weight and "
+            "tells you when it has done so."
+        )
+        return
+
+    if not controls["run"]:
+        st.info("Parameters set. Press **Run ranking** in the sidebar.")
+        return
+
+    try:
+        data_path = write_temp_csv(controls["uploaded"].getvalue())
+
+        with warnings.catch_warnings(record=True) as load_warnings:
+            warnings.simplefilter("always")
+            df_in = load_icb_features(data_path, gap_units=controls["gap_units"])
+
+        report = check_icb_features(df_in)
+        report.raise_if_failed()
+
+        market_weights = MarketWeightConfig(
+            register=float(controls["w_register"]),
+            prevalence=float(controls["w_prevalence"]),
+            treatment_gap=float(controls["w_gap_market"]),
+            warfarin_proxy=float(controls["w_warfarin_market"]),
+        )
+        readiness_weights = ReadinessWeightConfig(
+            treatment_gap=float(controls["w_gap_readiness"]),
+            warfarin_proxy=float(controls["w_warfarin_readiness"]),
+            digital_maturity=float(controls["w_digital"]),
+        )
+
+        result = score_and_rank(
+            df_in,
+            config=base_config,
+            market_weights_override=market_weights,
+            readiness_weights_override=readiness_weights,
+            alpha_override=float(controls["alpha"]),
+            friction_weight_override=float(controls["friction_weight"]),
+            top_n_override=int(controls["top_n"]),
+            return_result=True,
+        )
+        assert isinstance(result, ScoringResult)
+        df_ranked = result.ranking
+
+        sensitivity = None
+        if controls["run_scenarios"] and SCENARIO_CONFIG_PATH.exists():
+            scenario_results = run_scenarios(df_in, result.config, load_scenarios(SCENARIO_CONFIG_PATH))
+            base_name = "base_case" if "base_case" in scenario_results else next(iter(scenario_results))
+            sensitivity = build_sensitivity(scenario_results, base_scenario=base_name)
+
+        has_region = "region" in df_ranked.columns
+        region_pivot = build_region_pivot(df_ranked) if has_region else None
+        region_scores = build_region_scores(df_ranked) if has_region else None
+
+    except ValidationError as exc:
+        st.error("Input data failed validation.")
+        st.code(str(exc))
+        return
+    except (ValueError, FileNotFoundError) as exc:
+        st.error(f"Run failed: {exc}")
+        return
+    except Exception as exc:  # pragma: no cover - surfaced to the user, not swallowed
+        st.error(f"Unexpected failure: {type(exc).__name__}: {exc}")
+        st.exception(exc)
+        return
+
+    st.success(f"Ranking completed for {len(df_ranked)} ICBs.")
+
+    for warning in load_warnings:
+        st.warning(str(warning.message))
+    for message in report.warnings:
+        st.warning(message)
+    for message in result.warnings:
+        st.warning(message)
+    if result.signals_absent:
+        st.info(
+            "Optional signals not present in the upload: "
+            + ", ".join(result.signals_absent)
+            + ". Their weight was redistributed across the signals that are present."
+        )
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("ICBs scored", len(df_ranked))
+    metric_cols[1].metric("Included in Top N", int(df_ranked["recommended_included"].sum()))
+    metric_cols[2].metric("Alpha applied", f"{result.config.alpha:.2f}")
+    metric_cols[3].metric(
+        "Market/readiness correlation",
+        "n/a" if result.pillar_correlation is None else f"{result.pillar_correlation:.2f}",
+    )
 
     display_ranked_cols = {
         "rank": "Rank",
-        "icb_code": "ICB Code",
-        "icb_name": "ICB Name",
+        "icb_code": "ICB code",
+        "icb_name": "ICB name",
         "region": "Region",
-        "n_register": "Normalised register",
-        "n_prevalence": "Normalised prevalence",
-        "n_treatment_gap": "Normalised treatment gap",
-        "n_warfarin_proxy": "Normalised warfarin proxy",
-        "final_score": "Final score",
         "market_score": "Market score",
         "readiness_score": "Readiness score",
-        "recommended_cutoff_top_n": "Top N cut off",
+        "friction_score": "Friction score",
+        "final_score": "Final score",
+        "recommended_cutoff_top_n": "Top N cut-off",
         "recommended_included": "Included in Top N",
     }
+    display_ranked_cols.update({c: humanise(c) for c in normalised_signal_columns(df_ranked)})
 
-    display_pivot_cols = {
-        "region": "Region",
-        "total_icbs": "Total ICBs",
-        "included_icbs": "ICBs included in Top N",
-        "included_rate": "Inclusion rate (percent)",
-        "avg_n_register": "Average normalised register",
-        "avg_n_prevalence": "Average normalised prevalence",
-        "avg_n_treatment_gap": "Average normalised treatment gap",
-        "avg_n_warfarin_proxy": "Average normalised warfarin proxy",
-         "avg_final_score": "Average final score",
-    }
-
-    df_ranked_display = prettify_columns_for_display(df_ranked, display_ranked_cols)
-    region_pivot_display = prettify_columns_for_display(region_pivot, display_pivot_cols)
-    region_scores_display = prettify_columns_for_display(
-        region_scores, {"region": "Region", "avg_final_score": "Average final score"}
+    tab_ranking, tab_regions, tab_sensitivity, tab_audit = st.tabs(
+        ["Ranking", "Regions", "Sensitivity", "Audit"]
     )
 
-    c1, c2 = st.columns([2, 1], gap="large")
-
-    with c1:
-        st.subheader("ICB ranking")
-        st.dataframe(df_ranked_display, use_container_width=True, hide_index=True)
-
-        st.subheader("Regional summary")
-        st.dataframe(region_pivot_display, use_container_width=True, hide_index=True)
-
-        st.subheader("UK opportunity map")
-        render_web_map(region_scores_map)
-
-        st.subheader("Region opportunity score summary")
-        st.dataframe(region_scores_display, use_container_width=True, hide_index=True)
-
-    with c2:
-        st.subheader("Download")
+    with tab_ranking:
+        st.dataframe(
+            prettify_columns_for_display(df_ranked, display_ranked_cols),
+            use_container_width=True,
+            hide_index=True,
+        )
         st.download_button(
             label="Download ranking CSV",
-            data=csv_bytes,
+            data=df_ranked.to_csv(index=False).encode("utf-8"),
             file_name="icb_opportunity_ranking.csv",
             mime="text/csv",
-        )    
-    
+        )
+
+    with tab_regions:
+        if region_pivot is None or region_scores is None:
+            st.info("The uploaded file has no Region column, so regional summaries are unavailable.")
+        else:
+            st.subheader("Regional summary")
+            pivot_labels = {c: humanise(c) for c in region_pivot.columns}
+            pivot_labels.update(
+                {
+                    "region": "Region",
+                    "total_icbs": "Total ICBs",
+                    "included_icbs": "ICBs in Top N",
+                    "included_rate": "Inclusion rate (%)",
+                }
+            )
+            st.dataframe(
+                prettify_columns_for_display(region_pivot, pivot_labels),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.subheader("Opportunity map")
+            render_map(region_scores)
+
+    with tab_sensitivity:
+        if sensitivity is None:
+            st.info("Scenario sensitivity was not run. Enable it in the sidebar.")
+        else:
+            counts = sensitivity["stability"].value_counts().to_dict()
+            cols = st.columns(3)
+            cols[0].metric("Robust", int(counts.get("robust", 0)), help="Inside the cut-off under every scenario.")
+            cols[1].metric("Fragile", int(counts.get("fragile", 0)), help="Inclusion depends on the scenario.")
+            cols[2].metric("Excluded", int(counts.get("excluded", 0)), help="Outside the cut-off under every scenario.")
+            st.dataframe(sensitivity, use_container_width=True, hide_index=True)
+            st.download_button(
+                label="Download sensitivity CSV",
+                data=sensitivity.to_csv(index=False).encode("utf-8"),
+                file_name="icb_sensitivity.csv",
+                mime="text/csv",
+            )
+
+    with tab_audit:
+        st.caption("Everything needed to reproduce this ranking.")
+        st.json(result.audit())
+
 
 if __name__ == "__main__":
     main()

@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+.venv/
+venv/
+env/
+
+.DS_Store
+.idea/
+.vscode/
+
+# Generated rankings and audit records. Commit deliberately, not by accident.
+# The rankings directory itself is tracked via .gitkeep so the CLI always has
+# somewhere to write.
+data/outputs/*
+!data/outputs/rankings/
+data/outputs/rankings/*
+!data/outputs/rankings/.gitkeep
