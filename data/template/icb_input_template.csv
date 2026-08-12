@@ -1,2 +1,3 @@
-ICB ODS code,ICB ONS code,ICB name,Register,Prevalence (%),Patients receiving Intervention (%),Treatment Gap (%),Warfarin Item icb,Region
-ICBXX,ONSXX,Example ICB,12000,1.8,90,18,4500,Example Region
+ICB ODS code,ICB name,Register,Prevalence (%),Treatment Gap (%),Warfarin Item icb,Region,Digital Maturity (0-1),Procurement Friction (0-1)
+ICBXX,Example ICB,12000,1.8,18,4500,North West,0.65,0.30
+ICBYY,Second Example ICB,9500,2.1,12,3800,London,0.40,0.55
