@@ -1,12 +1,47 @@
+# Scoring configuration for the Heagital Market Decision Engine.
+#
+# Every key below is read by heagital_mde.model.scoring.schema.load_scoring_config.
+# Unknown keys raise an error rather than being ignored, so a typo can never
+# silently change a published ranking.
+
 weights:
-  clinical_risk: 0.45
-  adoption_readiness: 0.35
-  procurement_friction: 0.20
+  # Market attractiveness: how much addressable opportunity an ICB represents.
+  # Renormalised to sum to 1, so these are relative emphases.
+  market:
+    register: 0.30
+    prevalence: 0.20
+    treatment_gap: 0.30
+    warfarin_proxy: 0.20
+
+  # Adoption readiness: how easily an ICB can absorb the product.
+  # digital_maturity is an optional input column. When it is absent from the
+  # data, its weight is redistributed across the remaining readiness signals
+  # and the engine warns that readiness overlaps with market.
+  readiness:
+    treatment_gap: 0.35
+    warfarin_proxy: 0.25
+    digital_maturity: 0.40
+
+# Blend between the two pillars:
+#   final = alpha * market + (1 - alpha) * readiness - friction_weight * friction
+# alpha = 1.0 ranks purely on market size, alpha = 0.0 purely on readiness.
+alpha: 0.60
+
+# Penalty applied to the optional procurement_friction column. Applied outside
+# the alpha blend, so a high-friction ICB is pushed down regardless of alpha.
+# Has no effect when the input has no procurement_friction column.
+friction_weight: 0.20
 
 normalisation:
+  # minmax preserves magnitude but is outlier-sensitive; rank is more stable on
+  # a 42-row panel. Switch to 'rank' for a robustness check.
   method: minmax
   clip: true
+  # Trim this fraction from each tail before min-max scaling (0.0 disables).
+  winsorize: 0.0
+  # Value assigned when a signal has no spread across ICBs. 0.5 is neutral;
+  # 0.0 would silently delete the signal's weight.
+  constant_fill: 0.5
 
 cutoff:
   top_n: 15
-
