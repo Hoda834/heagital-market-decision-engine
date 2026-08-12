@@ -61,7 +61,7 @@ def write_temp_csv(uploaded_bytes: bytes) -> Path:
 
 
 def normalise_region_label(value: object) -> str:
-    if value is None or (isinstance(value, float) and pd.isna(value)) or pd.isna(value):
+    if value is None or pd.isna(value):
         return "Unknown"
     text = str(value).strip()
     return text if text else "Unknown"
@@ -163,19 +163,25 @@ def render_map(region_scores: pd.DataFrame) -> None:
     geojson = load_region_geojson(GEOJSON_PATH)
     name_key = geojson_name_key(geojson) if geojson else None
 
+    # Plotly 6 renamed the Mapbox-backed figures and deprecated the old names.
+    # Pick whichever this install provides so the app is warning-free on both.
+    modern = hasattr(px, "scatter_map")
+    style_kwarg = "map_style" if modern else "mapbox_style"
+
     if geojson and name_key:
-        fig = px.choropleth_mapbox(
+        choropleth = px.choropleth_map if modern else px.choropleth_mapbox
+        fig = choropleth(
             region_scores,
             geojson=geojson,
             locations="region",
             featureidkey=f"properties.{name_key}",
             color="avg_final_score",
             color_continuous_scale="Viridis",
-            mapbox_style="carto-positron",
             center={"lat": 52.8, "lon": -1.5},
             zoom=4.6,
             opacity=0.75,
             height=520,
+            **{style_kwarg: "carto-positron"},
         )
     else:
         with_coords = apply_region_centroids(region_scores)
@@ -185,7 +191,8 @@ def render_map(region_scores: pd.DataFrame) -> None:
                 "The regional tables below are unaffected."
             )
             return
-        fig = px.scatter_mapbox(
+        scatter = px.scatter_map if modern else px.scatter_mapbox
+        fig = scatter(
             with_coords,
             lat="lat",
             lon="lon",
@@ -196,15 +203,15 @@ def render_map(region_scores: pd.DataFrame) -> None:
             color_continuous_scale="Viridis",
             zoom=5,
             height=520,
+            **{style_kwarg: "carto-positron"},
         )
-        fig.update_layout(mapbox_style="carto-positron")
         st.caption(
             "Showing region centroids. Drop a populated NHS England region GeoJSON at "
             "`data/geo/nhs_england_regions.geojson` to switch to boundary shading."
         )
 
     fig.update_layout(margin={"r": 0, "t": 40, "l": 0, "b": 0}, title="Average final score by NHS region")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 def prettify_columns_for_display(df: pd.DataFrame, mapping: Dict[str, str]) -> pd.DataFrame:
@@ -242,18 +249,20 @@ def render_sidebar(default_top_n: int, default_alpha: float, default_friction: f
             help="'auto' infers from the observed range. Set explicitly if your file mixes conventions.",
         )
 
+        # Explicit keys: the market and readiness blocks share signal names, and
+        # identical labels would otherwise collide into one widget.
         st.header("2. Market weights")
         st.caption("Relative emphasis within the market pillar. Rescaled to sum to 1.")
-        controls["w_register"] = st.slider("AF register size", 0.0, 1.0, 0.30, 0.01)
-        controls["w_prevalence"] = st.slider("Prevalence", 0.0, 1.0, 0.20, 0.01)
-        controls["w_gap_market"] = st.slider("Treatment gap", 0.0, 1.0, 0.30, 0.01)
-        controls["w_warfarin_market"] = st.slider("Warfarin proxy", 0.0, 1.0, 0.20, 0.01)
+        controls["w_register"] = st.slider("AF register size", 0.0, 1.0, 0.30, 0.01, key="mkt_register")
+        controls["w_prevalence"] = st.slider("Prevalence", 0.0, 1.0, 0.20, 0.01, key="mkt_prevalence")
+        controls["w_gap_market"] = st.slider("Treatment gap", 0.0, 1.0, 0.30, 0.01, key="mkt_gap")
+        controls["w_warfarin_market"] = st.slider("Warfarin proxy", 0.0, 1.0, 0.20, 0.01, key="mkt_warfarin")
 
         st.header("3. Readiness weights")
         st.caption("Relative emphasis within the readiness pillar. Rescaled to sum to 1.")
-        controls["w_gap_readiness"] = st.slider("Treatment gap ", 0.0, 1.0, 0.35, 0.01)
-        controls["w_warfarin_readiness"] = st.slider("Warfarin proxy ", 0.0, 1.0, 0.25, 0.01)
-        controls["w_digital"] = st.slider("Digital maturity", 0.0, 1.0, 0.40, 0.01)
+        controls["w_gap_readiness"] = st.slider("Treatment gap", 0.0, 1.0, 0.35, 0.01, key="rdy_gap")
+        controls["w_warfarin_readiness"] = st.slider("Warfarin proxy", 0.0, 1.0, 0.25, 0.01, key="rdy_warfarin")
+        controls["w_digital"] = st.slider("Digital maturity", 0.0, 1.0, 0.40, 0.01, key="rdy_digital")
 
         st.header("4. Decision parameters")
         controls["alpha"] = st.slider(
@@ -427,7 +436,7 @@ def main() -> None:
     with tab_ranking:
         st.dataframe(
             prettify_columns_for_display(df_ranked, display_ranked_cols),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         st.download_button(
@@ -453,7 +462,7 @@ def main() -> None:
             )
             st.dataframe(
                 prettify_columns_for_display(region_pivot, pivot_labels),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
             st.subheader("Opportunity map")
@@ -468,7 +477,7 @@ def main() -> None:
             cols[0].metric("Robust", int(counts.get("robust", 0)), help="Inside the cut-off under every scenario.")
             cols[1].metric("Fragile", int(counts.get("fragile", 0)), help="Inclusion depends on the scenario.")
             cols[2].metric("Excluded", int(counts.get("excluded", 0)), help="Outside the cut-off under every scenario.")
-            st.dataframe(sensitivity, use_container_width=True, hide_index=True)
+            st.dataframe(sensitivity, width="stretch", hide_index=True)
             st.download_button(
                 label="Download sensitivity CSV",
                 data=sensitivity.to_csv(index=False).encode("utf-8"),

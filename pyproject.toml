@@ -17,7 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 app = [
-    "streamlit>=1.32",
+    # >=1.49 for the `width` argument that replaced `use_container_width`.
+    "streamlit>=1.49",
+    # The map helpers work on both plotly 5 (scatter_mapbox) and 6 (scatter_map).
     "plotly>=5.20",
 ]
 dev = [
@@ -36,4 +38,10 @@ heagital_mde = ["config/*.yml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-filterwarnings = ["ignore::UserWarning"]
+# Validation and loader warnings are part of the contract and are asserted on
+# directly, so they are silenced only where they would be incidental noise.
+filterwarnings = [
+    "ignore:.*Treatment Gap.*:UserWarning",
+    "ignore:.*ICB row.*:UserWarning",
+    "ignore:.*region is blank.*:UserWarning",
+]

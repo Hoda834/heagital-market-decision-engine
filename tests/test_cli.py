@@ -82,6 +82,41 @@ def test_cli_strict_mode_promotes_warnings_to_errors(tmp_path, write_csv, scorin
     assert main(args + ["--strict"]) == 1
 
 
+def test_audit_records_the_gap_units_actually_applied(tmp_path, write_csv, sample_rows, scoring_config_path):
+    """'auto' is a request, not an interpretation; the audit must name the result."""
+    output_dir = tmp_path / "out"
+    main(_args(write_csv(sample_rows), output_dir, scoring_config_path, "--gap-units", "auto"))
+
+    payload = json.loads((output_dir / "run_audit.json").read_text(encoding="utf-8"))
+    assert payload["gap_units_requested"] == "auto"
+    assert payload["gap_units_applied"] == "percent"
+
+
+def test_audit_captures_load_warnings(tmp_path, write_csv, scoring_config_path):
+    rows = "QA1,Alpha,1000,2.0,0.18,500,London\nQB2,Beta,2000,3.0,0.22,600,London\nQC3,Gamma,3000,4.0,0.3,700,London\n"
+    output_dir = tmp_path / "out"
+    main(_args(write_csv(rows), output_dir, scoring_config_path, "--gap-units", "percent"))
+
+    payload = json.loads((output_dir / "run_audit.json").read_text(encoding="utf-8"))
+    assert any("read as percentages" in w for w in payload["load_warnings"])
+
+
+def test_default_paths_fall_back_to_cwd_outside_a_source_checkout(monkeypatch, tmp_path):
+    """A non-editable install must not resolve defaults inside site-packages."""
+    from heagital_mde.cli import run as run_module
+
+    monkeypatch.setattr(run_module, "PACKAGE_ROOT", tmp_path / "site-packages" / "heagital_mde")
+    monkeypatch.chdir(tmp_path)
+    assert run_module._default_project_root() == tmp_path.resolve()
+
+
+def test_default_paths_use_the_repo_in_a_source_checkout():
+    from heagital_mde.cli import run as run_module
+
+    root = run_module._default_project_root()
+    assert (root / "src" / "heagital_mde").is_dir()
+
+
 def test_cli_top_n_override_is_applied(tmp_path, write_csv, sample_rows, scoring_config_path):
     import pandas as pd
 

@@ -62,6 +62,22 @@ def test_legacy_config_format_raises_instead_of_being_ignored(tmp_path):
         load_scoring_config(path)
 
 
+def test_partial_weight_block_raises_instead_of_blending_with_defaults(tmp_path):
+    """Specifying one weight must not silently inherit the other three."""
+    path = tmp_path / "partial.yml"
+    path.write_text("weights:\n  market:\n    register: 0.9\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="is missing"):
+        load_scoring_config(path)
+
+
+def test_omitting_a_whole_block_still_uses_defaults(tmp_path):
+    path = tmp_path / "empty.yml"
+    path.write_text("alpha: 0.5\n", encoding="utf-8")
+    cfg = load_scoring_config(path)
+    assert sum(cfg.market_weights.as_dict().values()) == pytest.approx(1.0)
+    assert cfg.alpha == pytest.approx(0.5)
+
+
 def test_unknown_config_key_raises(tmp_path):
     path = tmp_path / "typo.yml"
     path.write_text("weights:\n  market:\n    registr: 0.3\n", encoding="utf-8")
@@ -199,6 +215,37 @@ def test_friction_weight_without_the_column_warns_and_is_ignored(write_csv, samp
     result = score_and_rank(df, config=_config(friction_weight=0.5), return_result=True)
     assert any("friction" in w for w in result.warnings)
     assert (result.ranking["friction_score"] == 0.0).all()
+
+
+def test_blank_optional_signal_scores_neutral_instead_of_nan(write_csv):
+    """A blank optional cell must not propagate NaN into final_score."""
+    from tests.conftest import OPTIONAL_HEADER
+
+    rows = (
+        "QA1,Alpha,1000,2.0,10,500,London,0.8,0.1\n"
+        "QB2,Beta,2000,3.0,20,600,London,,0.2\n"  # blank digital maturity
+        "QC3,Gamma,3000,4.0,30,700,Midlands,0.4,0.3\n"
+    )
+    df = load_icb_features(write_csv(rows, header=OPTIONAL_HEADER))
+    result = score_and_rank(df, config=_config(), return_result=True)
+
+    assert result.ranking["final_score"].notna().all()
+    assert result.ranking["readiness_score"].notna().all()
+    assert any("blank for 1 ICB" in w for w in result.warnings)
+
+    filled = result.ranking.set_index("icb_code").loc["QB2", "n_digital_maturity"]
+    assert filled == pytest.approx(0.5)
+
+
+def test_collinearity_remedy_matches_the_data_supplied(write_csv, sample_rows):
+    """Do not tell the user to add a column they already supplied."""
+    df = load_icb_features(write_csv(sample_rows))
+    absent = score_and_rank(
+        df, config=_config(readiness_weights=ReadinessWeightConfig(0.5, 0.5, 0.0)), return_result=True
+    )
+    collinear = [w for w in absent.warnings if "correlate" in w]
+    if collinear:
+        assert "Supply a 'digital_maturity' column" in collinear[0]
 
 
 def test_collinearity_is_reported(write_csv, sample_rows):

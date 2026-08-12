@@ -135,13 +135,22 @@ def _resolve_gap_units(gap: pd.Series, gap_units: GapUnits) -> str:
 
 
 def _warn_ambiguous_gap(gap: pd.Series, units: str, explicit: bool) -> None:
+    """Warn on the two readings of the gap column that could silently be 100x wrong."""
     observed = gap.dropna()
-    if observed.empty or explicit:
+    if observed.empty:
         return
+
     if units == "percent" and float(observed.max()) <= FRACTION_HEURISTIC_MAX:
         warnings.warn(
             "Treatment Gap values are all <= 1 but are being read as percentages, which yields "
             "gaps under 1%. If the column already holds fractions, pass gap_units='fraction'.",
+            UserWarning,
+            stacklevel=3,
+        )
+    elif units == "fraction" and not explicit:
+        warnings.warn(
+            "Treatment Gap values are all <= 1, so they were read as fractions rather than "
+            "percentages. If the column holds percentages, pass gap_units='percent'.",
             UserWarning,
             stacklevel=3,
         )
@@ -214,4 +223,9 @@ def load_icb_features(
         if col in df.columns and col in UNIT_INTERVAL_COLUMNS:
             df[col] = _parse_numeric(df[col])
 
-    return df.reset_index(drop=True)
+    df = df.reset_index(drop=True)
+    # Record the interpretation actually applied, so the audit trail can report
+    # 'percent' or 'fraction' rather than the user's 'auto' request.
+    df.attrs["gap_units_resolved"] = units
+    df.attrs["source_file"] = str(resolved)
+    return df

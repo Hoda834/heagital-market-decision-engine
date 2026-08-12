@@ -108,6 +108,17 @@ def _read_block(raw: Any, keys: tuple[str, ...], block: str, path: Path) -> Dict
             f"Unknown key(s) under weights.{block} in {path}: {unknown}. Expected any of {list(keys)}."
         )
 
+    # A partially specified block would quietly blend the caller's weights with
+    # built-in defaults, which is exactly the silent-fallback behaviour this
+    # loader exists to prevent. Omit the block entirely to accept the defaults.
+    if raw:
+        absent = [k for k in keys if k not in raw]
+        if absent:
+            raise ValueError(
+                f"weights.{block} in {path} is missing {absent}. Specify every key "
+                f"({list(keys)}), or omit the whole block to use the defaults."
+            )
+
     values: Dict[str, float] = {}
     for key in keys:
         if key not in raw:

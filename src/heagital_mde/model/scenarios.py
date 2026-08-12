@@ -15,6 +15,7 @@ from heagital_mde.model.scoring.schema import (
     ReadinessWeightConfig,
     ScoringConfig,
     clip_01,
+    with_overrides,
 )
 
 KNOWN_SCENARIO_KEYS = {
@@ -30,9 +31,11 @@ KNOWN_SCENARIO_KEYS = {
 class Scenario:
     """A named perturbation of the base scoring configuration.
 
-    Deltas are additive on the *pre-normalisation* weights. Because each weight
-    block is renormalised to sum to 1 afterwards, a delta expresses relative
-    emphasis rather than an absolute weight.
+    Deltas are added to the base config's weights, which are themselves already
+    normalised to sum to 1. Each block is renormalised again afterwards, so a
+    delta shifts relative emphasis rather than setting an absolute weight: with
+    four market weights at 0.25, a +0.5 delta on one takes it to 0.5, not 0.75.
+    Weights are floored at 0 before renormalising.
     """
 
     name: str
@@ -56,8 +59,6 @@ class Scenario:
             raise ValueError(f"Scenario '{self.name}' zeroes out every market weight.")
         if sum(readiness.values()) <= 0.0:
             raise ValueError(f"Scenario '{self.name}' zeroes out every readiness weight.")
-
-        from heagital_mde.model.scoring.schema import with_overrides
 
         return with_overrides(
             base,

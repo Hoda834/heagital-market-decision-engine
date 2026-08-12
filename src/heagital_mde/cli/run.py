@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import sys
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
@@ -16,7 +17,24 @@ from heagital_mde.model.scoring import ScoringResult, score_and_rank
 from heagital_mde.model.scoring.schema import load_scoring_config
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-PROJECT_ROOT = PACKAGE_ROOT.parents[1]
+
+
+def _default_project_root() -> Path:
+    """Locate the data directories.
+
+    In a source checkout (or an editable install) the package sits at
+    ``<repo>/src/heagital_mde``, so the repo root is two levels up. Once the
+    package is installed normally it lives in site-packages, where that walk
+    lands somewhere meaningless — fall back to the working directory so the
+    console script reads the caller's project rather than the install tree.
+    """
+    candidate = PACKAGE_ROOT.parents[1]
+    if (candidate / "src" / "heagital_mde").is_dir() and (candidate / "data").is_dir():
+        return candidate
+    return Path.cwd()
+
+
+PROJECT_ROOT = _default_project_root()
 
 DEFAULT_INPUT = PROJECT_ROOT / "data" / "raw"
 DEFAULT_SCORING_CONFIG = PACKAGE_ROOT / "config" / "scoring_config.yml"
@@ -73,7 +91,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir = _prepare_output_dir(args.output_dir)
 
         print(f"Loading ICB data from {input_file} ...")
-        df = load_icb_features(input_file, gap_units=args.gap_units)
+        with warnings.catch_warnings(record=True) as load_warnings:
+            warnings.simplefilter("always")
+            df = load_icb_features(input_file, gap_units=args.gap_units)
+        for caught in load_warnings:
+            print(f"  warning: {caught.message}")
+
+        gap_units_resolved = df.attrs.get("gap_units_resolved", args.gap_units)
+        print(f"  treatment gap read as: {gap_units_resolved}")
 
         print("Validating input data ...")
         report = check_icb_features(df)
@@ -107,7 +132,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "input_file": str(input_file),
             "input_sha256": _file_digest(input_file),
             "scoring_config": str(args.config),
-            "gap_units": args.gap_units,
+            "gap_units_requested": args.gap_units,
+            "gap_units_applied": gap_units_resolved,
+            "load_warnings": [str(w.message) for w in load_warnings],
             "outputs": {"ranking": ranking_path.name},
             **result.audit(),
         }

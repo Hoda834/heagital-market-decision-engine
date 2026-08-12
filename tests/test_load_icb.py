@@ -46,11 +46,36 @@ def test_auto_detects_fraction_gaps(write_csv):
 
 
 def test_explicit_percent_on_fraction_data_warns(write_csv):
+    """Reading 0.18 as a percentage yields a 0.18% gap: a silent 100x error."""
+    rows = "QA1,Alpha,1000,2.0,0.18,500,London\nQB2,Beta,2000,3.0,0.22,600,London\n"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        df = load_icb_features(write_csv(rows), gap_units="percent")
+    assert df.loc[0, "treatment_gap"] == pytest.approx(0.0018)
+    assert [w for w in caught if "read as percentages" in str(w.message)]
+
+
+def test_auto_detected_fractions_are_announced(write_csv):
     rows = "QA1,Alpha,1000,2.0,0.18,500,London\nQB2,Beta,2000,3.0,0.22,600,London\n"
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         load_icb_features(write_csv(rows), gap_units="auto")
-    assert not [w for w in caught if "percentages" in str(w.message)]
+    assert [w for w in caught if "read as fractions" in str(w.message)]
+
+
+def test_ordinary_percent_data_is_not_warned_about(write_csv, sample_rows):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        load_icb_features(write_csv(sample_rows), gap_units="auto")
+    assert not [w for w in caught if "Treatment Gap" in str(w.message)]
+
+
+def test_resolved_gap_units_are_recorded(write_csv, sample_rows):
+    df = load_icb_features(write_csv(sample_rows), gap_units="auto")
+    assert df.attrs["gap_units_resolved"] == "percent"
+
+    rows = "QA1,Alpha,1000,2.0,0.18,500,London\nQB2,Beta,2000,3.0,0.22,600,London\n"
+    assert load_icb_features(write_csv(rows), gap_units="auto").attrs["gap_units_resolved"] == "fraction"
 
 
 def test_missing_required_column_raises(write_csv, sample_rows):
