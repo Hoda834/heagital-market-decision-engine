@@ -1,7 +1,7 @@
 # Runtime dependencies for the Streamlit app and the CLI.
 # The engine core needs only pandas, numpy and pyyaml (see pyproject.toml).
-streamlit==1.32.0
+streamlit==1.61.1
 pandas==2.2.1
 numpy==1.26.4
 pyyaml==6.0.1
-plotly==5.20.0
+plotly==6.9.0

@@ -174,6 +174,23 @@ def score_and_rank(
 
     base = normalise_columns(base, columns=signals_used, cfg=config.normalisation, prefix="n_")
 
+    # Rows are only dropped for missing *market* signals, so an optional signal
+    # with blank cells would otherwise propagate NaN all the way to final_score
+    # and silently sink those ICBs to the bottom of the ranking. Score the gaps
+    # at the neutral value instead, and say how many were filled.
+    neutral = float(config.normalisation.constant_fill)
+    for signal in signals_used:
+        if signal in MARKET_SIGNALS:
+            continue
+        column = f"n_{signal}"
+        blank = base[column].isna()
+        if blank.any():
+            base.loc[blank, column] = neutral
+            warnings.append(
+                f"{signal} is blank for {int(blank.sum())} ICB(s); those rows were scored at the "
+                f"neutral value {neutral:g} for this signal rather than being excluded."
+            )
+
     base["market_score"] = compute_market_score(base, config.market_weights)
     base["readiness_score"] = compute_readiness_score(base, config.readiness_weights)
 
@@ -195,10 +212,15 @@ def score_and_rank(
         if pd.notna(corr):
             correlation = float(corr)
             if correlation >= COLLINEARITY_WARNING_THRESHOLD:
+                remedy = (
+                    "Supply a 'digital_maturity' column to give readiness an independent basis."
+                    if "digital_maturity" in signals_absent
+                    else "Give digital_maturity more readiness weight, or add a further independent "
+                    "readiness signal, to make alpha a meaningful lever."
+                )
                 warnings.append(
                     f"Market and readiness scores correlate at {correlation:.2f}. They are built from "
-                    "overlapping signals, so alpha has limited influence on the ranking. Supply a "
-                    "'digital_maturity' column to give readiness an independent basis."
+                    f"overlapping signals, so alpha has limited influence on the ranking. {remedy}"
                 )
 
     id_cols = ["icb_code", "icb_name"]
